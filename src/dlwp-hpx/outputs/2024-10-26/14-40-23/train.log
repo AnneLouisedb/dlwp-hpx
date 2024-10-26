@@ -1,0 +1,7 @@
+[2024-10-26 14:40:24,076][__main__][INFO] - experiment working directory: /Users/annelouisedeboer/Desktop/Thesis_prep/dlwp-hpx/src/dlwp-hpx
+[2024-10-26 14:40:24,229][root][INFO] - Initializing TimeSeriesDataModule
+[2024-10-26 14:40:24,229][root][INFO] - Current working directory: /Users/annelouisedeboer/Desktop/Thesis_prep/dlwp-hpx/src/dlwp-hpx
+[2024-10-26 14:40:24,229][root][INFO] - src_directory: src/dlwp-hpx/data
+[2024-10-26 14:40:24,229][root][INFO] - dst_directory: src/dlwp-hpx/data
+[2024-10-26 14:40:24,229][dlwp.data.data_loading][INFO] - merging input datasets
+[2024-10-26 14:40:24,229][dlwp.data.data_loading][DEBUG] - open nc dataset src/dlwp-hpx/data/era5_0.25deg_3h_HPX64_1979-2021_t2m0.nc

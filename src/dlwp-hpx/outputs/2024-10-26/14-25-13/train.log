@@ -1,0 +1,3 @@
+[2024-10-26 14:25:13,825][__main__][INFO] - experiment working directory: /Users/annelouisedeboer/Desktop/Thesis_prep/dlwp-hpx/src/dlwp-hpx
+[2024-10-26 14:25:13,981][dlwp.data.data_loading][INFO] - merging input datasets
+[2024-10-26 14:25:13,981][dlwp.data.data_loading][DEBUG] - open nc dataset src/dlwp-hpx/data/era5_0.25deg_3h_HPX64_1979-2021_t2m0.nc

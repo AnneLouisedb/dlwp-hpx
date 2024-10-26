@@ -69,7 +69,10 @@ def train(cfg):
         np.random.seed(cfg.seed)
 
     # Data module
+    print("CFG", cfg.data)
+    
     data_module = instantiate(cfg.data.module)
+    
 
     # Model
     input_channels = len(cfg.data.input_variables)
@@ -91,9 +94,6 @@ def train(cfg):
             summary(model)
     else:
         summary(model)
-
-    #print(model)
-    #exit()
 
     # Instantiate PyTorch modules (with state dictionaries from checkpoint if given)
     criterion = instantiate(cfg.trainer.criterion)

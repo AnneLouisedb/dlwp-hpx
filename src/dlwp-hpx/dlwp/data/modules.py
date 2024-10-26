@@ -1,7 +1,7 @@
 # System modules
 import logging
 from typing import Optional, Union, Sequence
-
+import os
 # External modules
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
@@ -100,6 +100,11 @@ class TimeSeriesDataModule():
                     NOT produce any target array.
         """
         super().__init__()
+        logging.info(f"Initializing TimeSeriesDataModule")
+        logging.info(f"Current working directory: {os.getcwd()}")
+        logging.info(f"src_directory: {src_directory}")
+        logging.info(f"dst_directory: {dst_directory}")
+
         self.src_directory = src_directory
         self.dst_directory = dst_directory
         self.dataset_name = dataset_name
