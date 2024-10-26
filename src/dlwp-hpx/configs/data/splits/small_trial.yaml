@@ -1,0 +1,6 @@
+train_date_start: 2018-01-01
+train_date_end: 2018-01-01T21:00
+val_date_start: 2018-01-02
+val_date_end: 2018-01-02T09:00
+test_date_start: 2018-01-02 
+test_date_end: 2018-01-02T21:00

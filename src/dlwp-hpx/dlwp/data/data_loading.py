@@ -78,17 +78,18 @@ def open_time_series_dataset_classic_on_the_fly(
     suffix = suffix or ''
 
     def get_file_name(path, var):
+       
         return os.path.join(path, f"{prefix}{var}{suffix}.nc")
         #return os.path.join(path, f"{prefix}{var}{suffix}.zarr")
 
     merge_time = time.time()
-    logger.info("merging input datasets")
+    logger.info("merging input datasets, first function")
 
     datasets = []
     remove_attrs = ['mean', 'std'] if "LL" in prefix else ['varlev', 'mean', 'std']
     for variable in all_variables:
+       
         file_name = get_file_name(directory, variable)
-        logger.debug("open nc dataset %s", file_name)
         #ds = xr.open_dataset(file_name, chunks={'sample': batch_size})#.isel(varlev=0)
         ds = xr.open_dataset(file_name, chunks={'sample': batch_size}, autoclose=True)
         
@@ -117,30 +118,48 @@ def open_time_series_dataset_classic_on_the_fly(
             ds = ds.set_coords(['lat', 'lon'])
         except (ValueError, KeyError):
             pass
+        
         datasets.append(ds)
+    
+    
     # Merge datasets
     data = xr.merge(datasets, compat="override")
 
+
+    #writ this dataset to outfile somewhere --------------------
+    # Step 4: Rename the 'z' variable to 'z500'
+    data = data.rename({'z': 'z500'})
+    data = data.isel(level=0)
+   
+    # ---------------------------------------
+    
     # Convert to input/target array by merging along the variables
     input_da = data[list(input_variables)].to_array('channel_in', name='inputs').transpose(
-        'time', 'channel_in', 'face', 'height', 'width')
+        'time', 'channel_in', 'face', 'height', 'width') 
     target_da = data[list(output_variables)].to_array('channel_out', name='targets').transpose(
         'time', 'channel_out', 'face', 'height', 'width')
+    
 
     result = xr.Dataset()
     result['inputs'] = input_da
     result['targets'] = target_da
     
+    
     # Get constants
+    constants = None
     if constants is not None:
+        
         constants_ds = []
         for name, var in constants.items():
+            logger.info(name, var)
             constants_ds.append(xr.open_dataset(get_file_name(directory, name), autoclose=True).set_coords(['lat', 'lon'])[var])
+        
         constants_ds = xr.merge(constants_ds, compat='override')
         constants_da = constants_ds.to_array('channel_c', name='constants').transpose(
             'channel_c', 'face', 'height', 'width')
         result['constants'] = constants_da
 
+    
     logger.info("merged datasets in %0.1f s", time.time() - merge_time)
 
     return result
@@ -198,11 +217,12 @@ def create_time_series_dataset_classic(
         return os.path.join(path, f"{prefix}{var}{suffix}.nc")
 
     merge_time = time.time()
-    logger.info("merging input datasets")
+    logger.info("merging input datasets, second function")
 
     datasets = []
     remove_attrs = ['varlev', 'mean', 'std']
     for variable in all_variables:
+        logger.info("Open variable", variable)
         file_name = get_file_name(src_directory, variable)
         logger.debug("open nc dataset %s", file_name)
         if "sample" in list(xr.open_dataset(file_name).dims.keys()):
@@ -316,7 +336,7 @@ def create_time_series_dataset_zarr(
 
 
     merge_time = time.time()
-    logger.info("merging input datasets")
+    logger.info("merging input datasets, third function")
 
     datasets = []
     remove_attrs = ['varlev', 'mean', 'std']
@@ -516,10 +536,15 @@ class TimeSeriesDataset(Dataset):
     def __len__(self):
         if self.forecast_mode:
             return len(self._forecast_init_indices)
-        length = (self.ds.dims['time'] - self._window_length + 1) / self.batch_size
+        logger.info("WHAT IS THE WINDOW LENGTH")
+        logger.info(self._window_length)
+        #length = (self.ds.dims['time'] - self._window_length + 1) / self.batch_size
+        #logger.info(length)
         if self.drop_last:
-            return int(np.floor(length))
-        return int(np.ceil(length))
+            return 1 #int(np.floor(length)) # REMOVE
+        
+        #logger.info(int(np.ceil(length)))
+        return 1 #int(np.ceil(length))
 
     def _get_time_index(self, item):
         start_index = self._forecast_init_indices[item] if self.forecast_mode else item * self.batch_size

@@ -23,6 +23,7 @@ logging.getLogger('matplotlib').setLevel(logging.ERROR)
 @hydra.main(config_path='../configs', config_name='config', version_base=None)
 def train(cfg):
     logger.info("experiment working directory: %s", os.getcwd())
+    logger.info("START TRAINING")
 
 
     # init torch distributed
@@ -68,16 +69,17 @@ def train(cfg):
         if world_size > 0: th.cuda.manual_seed(cfg.seed)
         np.random.seed(cfg.seed)
 
-    # Data module
-    print("CFG", cfg.data)
-    
+   
     data_module = instantiate(cfg.data.module)
     
-
+    
+    logger.info("INSTANTIATE MODEL")
     # Model
     input_channels = len(cfg.data.input_variables)
     output_channels = len(cfg.data.output_variables) if cfg.data.output_variables is not None else input_channels
-    constants_arr = data_module.constants
+
+    constants_arr = None # data_module.constants REMOVE THIS
+    
     n_constants = 0 if constants_arr is None else len(constants_arr.keys()) # previously was 0 but with new format it is 1
 
     decoder_input_channels = int(cfg.data.get('add_insolation', 0))
@@ -94,6 +96,8 @@ def train(cfg):
             summary(model)
     else:
         summary(model)
+
+    logger.info("INSTANTIATE CRITERION")
 
     # Instantiate PyTorch modules (with state dictionaries from checkpoint if given)
     criterion = instantiate(cfg.trainer.criterion)
@@ -129,6 +133,8 @@ def train(cfg):
         val_error = th.inf
         iteration = 0
         epochs_since_improved = 0
+
+    logger.info("INSTANTIATE THE TRAINER?", device)
 
     # Instantiate the trainer and fit the model
     trainer = instantiate(

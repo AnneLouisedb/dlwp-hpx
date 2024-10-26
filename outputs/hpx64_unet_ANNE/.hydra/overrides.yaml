@@ -1,0 +1,17 @@
+- num_workers=8
+- port=29450
+- learning_rate=2e-4
+- batch_size=16
+- experiment_name=hpx64_unet_ANNE
+- model=hpx_rec_unet
+- model/modules/blocks@model.encoder.conv_block=conv_next_block
+- model/modules/blocks@model.decoder.conv_block=conv_next_block
+- model.encoder.n_channels=[136,68,34]
+- model.decoder.n_channels=[34,68,136]
+- trainer.max_epochs=300
+- data=era5_hpx32_1var_3h_24h
+- data.prefix=era5_1deg_3h_HPX32_1979-2018_
+- data.prebuilt_dataset=False
+- data.module.drop_last=True
+- trainer/lr_scheduler=cosine
+- trainer/optimizer=adam

@@ -165,6 +165,7 @@ class HEALPixRemap(_BaseRemap):
             #ds_mean = ds_ll.variables[vname].mean()
             #ds_std = ds_ll.variables[vname].std()
         else:
+            # Not a constant but a variable
             dims = [len(coords[coord]) for coord in coords]
 
             if poolsize < 2:
