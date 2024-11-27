@@ -14,6 +14,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dlwp.trainer.trainer import Trainer
+#from dlwp.trainer.trainer_dpe_refiner import RefinerTrainer
 
 logger = logging.getLogger(__name__)
 logging.getLogger('cfgrib').setLevel(logging.ERROR)
@@ -73,6 +74,7 @@ def train(cfg):
 
     # Model
     input_channels = len(cfg.data.input_variables)
+    
     output_channels = len(cfg.data.output_variables) if cfg.data.output_variables is not None else input_channels
     constants_arr = data_module.constants
     n_constants = 0 if constants_arr is None else len(constants_arr.keys()) # previously was 0 but with new format it is 1
@@ -82,6 +84,9 @@ def train(cfg):
     cfg.model['output_channels'] = output_channels
     cfg.model['n_constants'] = n_constants
     cfg.model['decoder_input_channels'] = decoder_input_channels
+
+    
+
     model = instantiate(cfg.model)
     model.batch_size = cfg.batch_size
     model.learning_rate = cfg.learning_rate
@@ -92,9 +97,7 @@ def train(cfg):
     else:
         summary(model)
 
-    #print(model)
-    #exit()
-
+  
     # Instantiate PyTorch modules (with state dictionaries from checkpoint if given)
     criterion = instantiate(cfg.trainer.criterion)
     optimizer = instantiate(cfg.trainer.optimizer, params=model.parameters())

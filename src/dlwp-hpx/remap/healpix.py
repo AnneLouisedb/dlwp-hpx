@@ -41,6 +41,14 @@ from cubesphere import to_chunked_dataset
 
 import matplotlib.pyplot as plt
 
+def fill_nan_with_mean(data):
+    # Calculate the mean of non-NaN values
+    mean_value = np.nanmean(data)
+    
+    # Fill NaN values with the calculated mean
+    data[np.isnan(data)] = mean_value
+    
+    return data
 
 class HEALPixRemap(_BaseRemap):
 
@@ -74,6 +82,7 @@ class HEALPixRemap(_BaseRemap):
         self.verbose = verbose
 
         resolution = 360./longitudes
+        print("Resolution?", resolution)
         self.npix = hp.nside2npix(nside)
 
         # Define and generate world coordinate systems (wcs) for forward and backward mapping. More information at
@@ -146,13 +155,17 @@ class HEALPixRemap(_BaseRemap):
         if times is not None: ds_ll = ds_ll.sel({"time": times})
 
         # Get the variable name
-        vname = list(ds_ll.keys())[0]
+        vname = list(ds_ll.keys())[1]
+        print("The variable name?", vname)
 
         # Set up coordinates and chunksizes for the HEALPix dataset
         coords = {}
         if "time" in list(ds_ll.coords):
             ds_ll = ds_ll.rename(time="sample")
             coords["sample"] = ds_ll.coords["sample"]
+
+        has_level = "level" in list(ds_ll.coords) # boolean to check if dataset has level
+
         if "level" in list(ds_ll.coords): coords["level"] = ds_ll.coords["level"]
         coords["face"] = np.array(range(12), dtype=np.int64)
         coords["height"] = np.array(range(self.nside), dtype=np.int64)
@@ -172,14 +185,39 @@ class HEALPixRemap(_BaseRemap):
 
                 # Allocate a (huge) array to store all samples (time steps) of the projected data
                 data_hpx = np.zeros(dims, dtype=ds_ll.variables[vname])
+                print("dimensinns", dims)
+                print("output shape?", data_hpx.shape)
 
                 # Iterate over all samples and levels, project them to HEALPix and store them in the predictors array
                 pbar = tqdm(ds_ll.coords["sample"], disable=not self.verbose)
                 for s_idx, sample in enumerate(pbar):
+                    print('number of time steps', len(pbar))
                     pbar.set_description("Remapping time steps")
-                    for l_idx, level in enumerate(ds_ll.coords["level"]):
-                        wagga = self.ll2hpx(data=ds_ll.variables[vname][s_idx, l_idx].values)
-                        data_hpx[s_idx, l_idx] = self.ll2hpx(data=ds_ll.variables[vname][s_idx, l_idx].values)
+
+                    if has_level:
+                        for l_idx, level in enumerate(ds_ll.coords["level"]): # here is the error because level is not included?!!
+                            wagga = self.ll2hpx(data=ds_ll.variables[vname][s_idx, l_idx].values)
+                            data_hpx[s_idx, l_idx] = self.ll2hpx(data=ds_ll.variables[vname][s_idx, l_idx].values)
+                    else: # this is new!
+                        l_idx = 1
+                        # error occurs here!
+                        data=ds_ll.variables[vname][s_idx].values
+                        print("data shape", data.shape)
+                        if np.isnan(data).any():
+                            print("data has nan vallues")
+                            #data = fill_nan_with_mean(data)
+                            if np.isnan(data).any():
+                                print("data has nan vallues")
+                            else:
+                                print("now data has no NAN values - fixed")
+                        else:
+                            print("NO nan values")
+
+                        
+                        # check if the data contains nan values! fill these with the neighbour values
+                        #print("Converting the normal map to a healpix shape..")
+                        #print(self.ll2hpx(data=data).shape)
+                        data_hpx[s_idx] = self.ll2hpx(data=data)
             else:
                 # Parallel sample mapping with 'poolsize' processes
 
@@ -345,7 +383,7 @@ class HEALPixRemap(_BaseRemap):
 
         # Convert the 1D HEALPix array into an array of shape [faces=12, nside, nside]
         hpx3d = self.hpx1d2hpx3d(hpx1d=hpx1d)
-        
+        print("healpix grid", hpx3d.shape)
         # Face index reordering/correction. Somewhat arbitrary; no clue why this is necessary
         #hpx3d = hpx3d[[1, 0, 3, 2, 6, 5, 4, 7, 9, 8, 11, 10]]
         #hpx3d = hpx3d[[9, 8, 11, 10, 6, 5, 4, 7, 1, 0, 3, 2,]]
@@ -358,6 +396,7 @@ class HEALPixRemap(_BaseRemap):
             plt.close()
 
         assert hpx1d_mask.all(), self.nans_found_in_data(data=hpx3d, data_orig=data, visualize=visualize)
+        print("visualization happened??")
 
         return hpx3d
 
@@ -571,14 +610,52 @@ if __name__ == "__main__":
 
     print("Projecting LatLon dataset to HEALPix...")
     file_path_ll = "data/era5_z500.nc"
-    print(xr.open_dataset(file_path_ll), "\n")
-    ds_hpx = remapper.remap(file_path=file_path_ll, poolsize=1, to_netcdf=False)
-    print(ds_hpx, "\n\n")
+    file_path_ll = "/gpfs/work5/0/prjs1254/data_ERA5_1.0/T2M_era5_Global_1degr_19400101-20240229.nc"
 
-    print("projecting forecast file generated by DLWP-HPX from HEALPix to LatLon")
-    file_path_hpx = "data/forecast.nc"
-    print(xr.open_dataset(file_path_hpx), "\n")
-    ds_ll = remapper.inverse_remap(forecast_path=file_path_hpx, verification_path=file_path_ll, poolsize=1, to_netcdf=False)
-    print(ds_ll)
+    # new data 
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX32_1940-2024_sst.nc'
+    #file_path_ll = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/SST_era5_NHExt_1degr_19400101-20240229.nc' 
+    #ds = xr.open_dataset(file_path_ll)
+    #ds = xr.open_dataset(path)
+    #print(ds)
+    #print(ds.variables)
+    # print the data - i want to know the time stamps
+    # is this hourly data?
+    #time_index = ds.time.to_index()
+    #frequency = time_index.inferred_freq
+    # take the mean over the week
+    # return new data
+    #print(f"Detected frequency: {frequency}")
+    # Resample to weekly mean  
+     
+    #ds = ds.resample(time="W").mean()
+
+    print('Data resampled..')
+    # print begin time and end time of this dataset
+
+    # Get and print the start and end times
+    start_time = ds.time.values[0]
+    end_time = ds.time.values[-1]
+
+    print(f"Dataset start time: {start_time}")
+    print(f"Dataset end time: {end_time}")
+
+
+
+    # coordinates: time, longitude, latitude
+    # data variables t2m and time_bnds>
+    #Various data attributes
+    #ds_hpx = remapper.remap(file_path=file_path_ll, poolsize=1, to_netcdf=True, target_variable_name='sst', chunk_ds = False, prefix= 'era5_1deg_1D_HPX32_1940-2024_')
+    #print(ds_hpx, "\n\n")
+    #print("END")
+    # now train a unet with this dataset?
+
+    # dataset = xr.open_dataset(self.data_path)
+
+    # print("projecting forecast file generated by DLWP-HPX from HEALPix to LatLon")
+    # file_path_hpx = "data/forecast.nc"
+    # print(xr.open_dataset(file_path_hpx), "\n")
+    # ds_ll = remapper.inverse_remap(forecast_path=file_path_hpx, verification_path=file_path_ll, poolsize=1, to_netcdf=False)
+    # print(ds_ll)
 
 

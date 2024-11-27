@@ -19,8 +19,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # custom
 from dlwp.utils import write_checkpoint
 
+# diffusion 
+from diffusers.schedulers import DDPMScheduler
+from pdearena.modules.loss import CustomMSELoss, PearsonCorrelationScore, ScaledLpLoss
 
-class Trainer():
+class RefinerTrainer():
     """
     A class for DLWP model training
     """
@@ -31,7 +34,7 @@ class Trainer():
             data_module: torch.nn.Module,  # Specify... (import)
             criterion: torch.nn.Module,  # Specify... (import)
             optimizer: torch.nn.Module,  # Specify... (import)
-            lr_scheduler: torch.nn.Module,  # Specify... (import)
+            lr_scheduler: torch.nn.Module,  # Specify... (import) # use warmup steps!!
             num_refinement_steps: int = 1,
             min_epochs: int = 100,
             max_epochs: int = 500,
@@ -39,7 +42,13 @@ class Trainer():
             amp_mode: str = "none",
             graph_mode: str = "none",
             device: torch.device = torch.device("cpu"),
-            output_dir: str = "/outputs/"
+            output_dir: str = "/outputs/",
+            padding_mode: str = "zeros",
+            predict_difference: bool = False,
+            difference_weight: float = 1.0,
+            num_refinement_steps: int = 3,
+            min_noise_std: float = 4e-7,
+            ema_decay: float = 0.995
             ):
         """
         Constructor.
@@ -57,6 +66,21 @@ class Trainer():
         self.early_stopping_patience = early_stopping_patience
 
         self.model = model.to(device=self.device)
+        self.train_criterion = CustomMSELoss()
+
+        #self.ema = ExponentialMovingAverage(self.model, decay=self.hparams.ema_decay)
+        # We use the Diffusion implementation here. Alternatively, one could
+        # implement the denoising manually.
+        betas = [min_noise_std ** (k / num_refinement_steps) for k in reversed(range(num_refinement_steps + 1))]
+        self.scheduler = DDPMScheduler(
+            num_train_timesteps=num_refinement_steps + 1,
+            trained_betas=betas,
+            prediction_type="v_prediction", # shouldnt this be epsilon?
+            clip_sample=False,
+        )
+        # Multiplies k before passing to frequency embedding.
+        self.time_multiplier = 1000 / num_refinement_steps
+
 
         if dist.is_initialized():
             self.dataloader_train, self.sampler_train = data_module.train_dataloader(num_shards=dist.get_world_size(),
@@ -116,104 +140,47 @@ class Trainer():
         if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
             self.writer = SummaryWriter(log_dir=self.output_dir_tb)
 
-    
-    # self.model.train()
-    # capture_stream.wait_stream(torch.cuda.current_stream())
-    # if k == 0:
-    #     with torch.cuda.stream(capture_stream):
-    #         for _ in range(num_warmup_steps):                
-    #             self.model.zero_grad(set_to_none=True)
-
-    #             # FW
-    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-    #                 #self.static_gen_train = self.model(self.static_inp)
-    #                 self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
-                    
-
-    #                 #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-    #                 self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
-
-    #             # BW
-    #             self.gscaler.scale(self.static_loss_train).backward()
-            
-    #         # sync here
-    #         capture_stream.synchronize()
-
-    #         gc.collect()
-    #         torch.cuda.empty_cache()
-
-    #         # create graph
-    #         self.train_graph = torch.cuda.CUDAGraph()
-
-    #         # zero grads before capture:
-    #         self.model.zero_grad(set_to_none=True)
-
-    #         # start capture
-    #         with torch.cuda.graph(self.train_graph):
-
-    #             # FW
-    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-    #                 #self.static_gen_train = self.model(self.static_inp)
-    #                 self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
-
-
-    #                 #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-    #                 self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
-
-    #             # BW
-    #             self.gscaler.scale(self.static_loss_train).backward()
-
-    #     # wait for capture to finish
-    #     torch.cuda.current_stream().wait_stream(capture_stream)
-    # else:
-    #     pass
-    #     # TO DO
-            
-
-    #HOW TO INCORPORATE THE PDE-REFINER IN THE TRAINING PROCESS?
-    # def train_step(self, u_t, u_prev): 
-    #     k = randint(0, self.num_steps + 1) if k == 0: 
-    #     pred = model(zeros_like(u_t), u_prev, k) 
-    #     target = u_t else: noise_std = self.min_noise_std ** (k / self.num_steps) 
-    #     noise = randn_like(u_t) 
-    #     u_t_noised = u_t + noise * noise_std 
-    #     pred = model(u_t_noised, u_prev, k) 
-    #     target = noise loss = mse(pred, target) 
-    #     return loss
-    
-    # def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
-    # # perform graph capture of the model
-    # self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
-    # self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
-    # k = random.randint(0, self.num_refinement_steps)
-
 
     def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
         # perform graph capture of the model
         self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
         self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
-       
+        # Multiplies k before passing to frequency embedding.
+        
         self.model.train()
         capture_stream.wait_stream(torch.cuda.current_stream())
+        # define the number of refinementss
+        batch_size = inp_shapes[0][0]
+        print('is this a batch size?', batch_size)
+        # this is the original k + 1 (number of training steps)
+        k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
 
-        self.static_k = torch.randint(0, self.num_refinement_steps + 1, (1,), device=self.device)
-     
         with torch.cuda.stream(capture_stream):
             for _ in range(num_warmup_steps):                
                 self.model.zero_grad(set_to_none=True)
 
                 # FW
                 with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                    #self.static_gen_train = self.model(self.static_inp)
-                    #self.static_gen_train = self.model.forward(self.static_inp)
-                    self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
+
+                    noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+                    noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
+
+                    signal_factor = 1 - noise_factor
+
+                    noise = torch.randn_like(self.static_tar)
                     
+                    y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
 
+                    x_in = torch.cat([self.static_inp, y_noised], axis=1)
 
-                    #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-                    self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
+                    pred = self.model(x_in, time=k * self.time_multiplier)
+                     
+                    target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
 
-                # BW
+                    self.static_loss_train= self.train_criterion(pred, target)
+                    
+                    
+                # Backward
                 self.gscaler.scale(self.static_loss_train).backward()
             
             # sync here
@@ -233,12 +200,23 @@ class Trainer():
 
                 # FW
                 with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                    #self.static_gen_train = self.model(self.static_inp)
-                    self.static_gen_train = self.model.forward(self.static_inp)
+                    
+                    noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+                    noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
 
+                    signal_factor = 1 - noise_factor
 
-                    #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-                    self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
+                    noise = torch.randn_like(self.static_tar)
+                    
+                    y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
+
+                    x_in = torch.cat([self.static_inp, y_noised], axis=1)
+
+                    pred = self.model(x_in, time=k * self.time_multiplier)
+                     
+                    target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
+
+                    self.static_loss_train= self.train_criterion(pred, target)
 
                 # BW
                 self.gscaler.scale(self.static_loss_train).backward()
@@ -246,6 +224,20 @@ class Trainer():
         # wait for capture to finish
         torch.cuda.current_stream().wait_stream(capture_stream)
     
+    def predict_next_solution(self):
+        # The 1 should be some time future parameter, i think the number of future time steps to predict
+        y_noised = torch.randn(
+            size=(self.static_inp.shape[0], 1, *self.static_inp.shape[2:]), dtype=self.static_inp[0].dtype, device=self.device
+        )
+        for k in self.scheduler.timesteps:
+           # time = torch.zeros(size=(self.static_inp.shape[0],), dtype=self.static_inp.dtype, device=self.device) + k
+            x_in = torch.cat([self.static_inp, y_noised], axis=1)
+            pred = self.model.forward(x_in, y_noised) # model takes an in put and a k?
+            y_noised = self.scheduler.step(pred, k, y_noised).prev_sample  # output with added noise?
+            # increasingly add noise and move to the final solution
+        y = y_noised
+        # NOT predicting the difference!!!
+        return y
 
     def _eval_capture(self, capture_stream, num_warmup_steps=20):
         self.model.eval()
@@ -257,9 +249,8 @@ class Trainer():
                 
                     # FW
                     with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                        #self.static_gen_eval = self.model(self.static_inp)
-                        self.static_gen_eval = self.model.forward(self.static_inp)
-
+                        # input from a single time step -> is the static input
+                        self.static_gen_eval = self.predict_next_solution()
 
                         self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
                         
@@ -283,14 +274,14 @@ class Trainer():
                 # FW
                 with torch.no_grad():
                     with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                        #self.static_gen_eval = self.model(self.static_inp)
-                        self.static_gen_eval = self.model.forward(self.static_inp)
-
+                        
+                        self.static_gen_eval = self.predict_next_solution()
 
                         self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
                         
                         self.static_losses_eval = []
                         for v_idx in range(len(self.output_variables)):
+                            # store the loss per output variable.. 
                             self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
                                                                           self.static_tar[:, :, :, v_idx]))
                             
