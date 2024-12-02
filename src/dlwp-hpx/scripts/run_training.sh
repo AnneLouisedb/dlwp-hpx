@@ -43,7 +43,7 @@ source activate dlwp-hpx
 #RUN_CMD="python -u scripts/train.py num_workers=8 port=29450 learning_rate=2e-4 batch_size=16 experiment_name=hpx64_unet_136-68-34_cnxt_skip_dil_gru_3h_300 model=hpx_rec_unet model/modules/blocks@model.encoder.conv_block=conv_next_block model/modules/blocks@model.decoder.conv_block=conv_next_block model.encoder.n_channels=[136,68,34] model.decoder.n_channels=[34,68,136] trainer.max_epochs=300 data=era5_hpx64_7var_3h_24h data.prefix=era5_0.25deg_3h_HPX64_1979-2021_  data.prebuilt_dataset=False data.module.drop_last=True trainer/lr_scheduler=cosine trainer/optimizer=adam"
 
 #HPx64 UNET 
-python /home/adboer/dlwp-hpx/src/dlwp-hpx/remap/healpix.py
+#python /home/adboer/dlwp-hpx/src/dlwp-hpx/remap/healpix.py
 
 
 #srun python /home/adboer/dlwp-hpx/src/dlwp-hpx/test_healpy_pdemodel.py
@@ -52,7 +52,7 @@ python /home/adboer/dlwp-hpx/src/dlwp-hpx/remap/healpix.py
 
 
 # conditional command
-RUN_CMD="python -u /home/adboer/dlwp-hpx/src/dlwp-hpx/scripts/train.py num_workers=8 port=29450 learning_rate=2e-4 batch_size=16 experiment_name=hpx64_unet_initial model=Cond_hpx_unet model.encoder.n_channels=[136,68,34] model.decoder.n_channels=[34,68,136] trainer.max_epochs=1 data=era5_hpx64_1var_24h_24h data.prefix=era5_1deg_1D_HPX32_1940-2024_  data.prebuilt_dataset=False data.module.drop_last=True trainer/lr_scheduler=cosine trainer/optimizer=adam"
+RUN_CMD="python -u /home/adboer/dlwp-hpx/src/dlwp-hpx/scripts/train.py num_workers=8 port=29450 learning_rate=2e-4 batch_size=16 experiment_name=hpx64_unet_initial model=Cond_hpx_unet model.encoder.n_channels=[256,128,64] model.decoder.n_channels=[64,128,256] trainer.max_epochs=1 data=era5_hpx64_1var_24h_24h data.prefix=era5_1deg_1D_HPX32_1940-2024_  data.prebuilt_dataset=False data.module.drop_last=True trainer/lr_scheduler=cosine trainer/optimizer=adam"
 
 
 # Specify number of GPUs and CPUs
@@ -79,12 +79,12 @@ TOTALCORES=16  # Number of CPUs
 #--gres=gpu:A100:${NUM_GPU} \
 
 
-# srun -u --ntasks=${TOTALGPU} \
-#      --ntasks-per-node=${NUM_GPU} \
-#      -c $(( ${TOTALCORES} / ${NUM_GPU} )) \
-#      bash -c "
-#      export WORLD_RANK=\${SLURM_PROCID}
-#      export HDF5_USE_FILE_LOCKING=False
-#      export CUDA_VISIBLE_DEVICES=0,1
-#      export HYDRA_FULL_ERROR=1 
-#      ${RUN_CMD}"
+srun -u --ntasks=${TOTALGPU} \
+     --ntasks-per-node=${NUM_GPU} \
+     -c $(( ${TOTALCORES} / ${NUM_GPU} )) \
+     bash -c "
+     export WORLD_RANK=\${SLURM_PROCID}
+     export HDF5_USE_FILE_LOCKING=False
+     export CUDA_VISIBLE_DEVICES=0,1
+     export HYDRA_FULL_ERROR=1 
+     ${RUN_CMD}"
