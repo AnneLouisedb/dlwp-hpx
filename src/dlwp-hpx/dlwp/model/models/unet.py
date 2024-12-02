@@ -198,9 +198,9 @@ class HEALPixUNet(th.nn.Module):
                                    enable_nhwc = self.enable_nhwc,
                                    enable_healpixpad = self.enable_healpixpad)
         
-        # hidden channels == fourier dimensions
+        
         self.time_embed = th.nn.Sequential(
-            th.nn.Linear(4, time_embed_dim),
+            th.nn.Linear(self.hidden_channels, time_embed_dim),
             self.encoder.activation,
             th.nn.Linear(time_embed_dim, time_embed_dim),)
         print("TIME embedding transform")
@@ -291,15 +291,13 @@ class HEALPixUNet(th.nn.Module):
             else:
                 inputs_0 = outputs[-1]
                 input_tensor = self._reshape_inputs([outputs[-1]] + list(inputs[1:]), step)
-                #print("reshaping input tensor SECOND", input_tensor.shape) # ([192, 4, 32, 32])
-
+                
             if time is not None:
-                # hidden channels is the dimenasion of the output?
-                # time is a tensor of length batch size
-                fourier =fourier_embedding(time, 4, device = input_tensor.device)
+                
+                fourier =fourier_embedding(time, self.hidden_channels, device = input_tensor.device)
                 
                 print('dims', fourier.shape) 
-                time_emb = self.time_embed(fourier) # errror here! we ned 192, 4, 32, 32
+                time_emb = self.time_embed(fourier) 
                 print(time_emb.shape)
                 
                 #print("reshape,",time_emb.shape)
