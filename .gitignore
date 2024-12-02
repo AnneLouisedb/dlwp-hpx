@@ -1,2 +1,4 @@
 src/dlwp-hpx/data
 outputs
+**/__pycache__
+*.out
