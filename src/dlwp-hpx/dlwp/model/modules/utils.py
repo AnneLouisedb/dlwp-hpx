@@ -38,9 +38,8 @@ def fourier_embedding(timesteps: torch.Tensor, dim, device, max_period=10000):
     args = timesteps[:, None].float() * freqs[None]
     embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
     if dim % 2:
-        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-    # new    
-    #embedding =  embedding.unsqueeze(-1).unsqueeze(-1)
+        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)   
+    
     return embedding
 
 

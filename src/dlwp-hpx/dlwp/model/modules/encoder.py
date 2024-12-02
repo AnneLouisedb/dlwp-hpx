@@ -111,7 +111,8 @@ class ConditionalUNetEncoder(th.nn.Module):
             n_layers: Sequence = (2, 2, 1),
             dilations: list = None,
             enable_nhwc: bool = False,
-            enable_healpixpad: bool = False
+            enable_healpixpad: bool = False,
+            time_embed_dim = 1,
     ):
         super().__init__()
         
@@ -147,6 +148,7 @@ class ConditionalUNetEncoder(th.nn.Module):
                 n_layers=n_layers[n], # number of layers in this convolutional block?
                 enable_nhwc=enable_nhwc,
                 enable_healpixpad=enable_healpixpad,
+                time_embed_dim = time_embed_dim
                 ))
             old_channels = curr_channel
 

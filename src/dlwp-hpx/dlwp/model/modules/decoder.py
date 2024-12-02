@@ -315,31 +315,7 @@ class ConditionalUNetDecoder(th.nn.Module): #ConditionalUNetDecoder
             enable_nhwc=enable_nhwc,
             enable_healpixpad=enable_healpixpad
             )
-    
-   # remove this
-    # def forward(self, inputs: Sequence, time_emb: th.Tensor) -> Sequence:
-    #     # time_emb depend on the hidden features
-    #     outputs = []
-    
-    #     for layer in self.encoder:
-    #         # if the layer contains a sequence
-    #         if isinstance(layer, th.nn.Sequential): # how to include upsampling and convolution in this decoder 
-    #             sequential_output = inputs
-    #             for sublayer in layer:
-    #                 if isinstance(sublayer, ConditionedBlock):
-    #                     sequential_output = sublayer(sequential_output, time_emb)
-    #                 else:
-    #                     sequential_output = sublayer(sequential_output)
-    #             outputs.append(sequential_output)
-    #         # if it is a layer apply the simple layer
-    #         else:
-    #             outputs.append(layer(inputs))
-            
-    #         # Update inputs for the next layer
-    #         inputs = outputs[-1]
-        
-    #     return outputs
-    
+     
     def forward(self, inputs: Sequence, time_emb: th.Tensor) -> th.Tensor:
         x = inputs[-1]
         for n, layer in enumerate(self.decoder):

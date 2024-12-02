@@ -118,8 +118,8 @@ hydra:
     - batch_size=16
     - experiment_name=hpx64_unet_initial
     - model=Cond_hpx_unet
-    - model.encoder.n_channels=[136,68,34]
-    - model.decoder.n_channels=[34,68,136]
+    - model.encoder.n_channels=[256,128,64]
+    - model.decoder.n_channels=[64,128,256]
     - trainer.max_epochs=1
     - data=era5_hpx64_1var_24h_24h
     - data.prefix=era5_1deg_1D_HPX32_1940-2024_
@@ -130,7 +130,7 @@ hydra:
   job:
     name: train
     chdir: null
-    override_dirname: batch_size=16,data.module.drop_last=True,data.prebuilt_dataset=False,data.prefix=era5_1deg_1D_HPX32_1940-2024_,data=era5_hpx64_1var_24h_24h,experiment_name=hpx64_unet_initial,learning_rate=2e-4,model.decoder.n_channels=[34,68,136],model.encoder.n_channels=[136,68,34],model=Cond_hpx_unet,num_workers=8,port=29450,trainer.max_epochs=1,trainer/lr_scheduler=cosine,trainer/optimizer=adam
+    override_dirname: batch_size=16,data.module.drop_last=True,data.prebuilt_dataset=False,data.prefix=era5_1deg_1D_HPX32_1940-2024_,data=era5_hpx64_1var_24h_24h,experiment_name=hpx64_unet_initial,learning_rate=2e-4,model.decoder.n_channels=[64,128,256],model.encoder.n_channels=[256,128,64],model=Cond_hpx_unet,num_workers=8,port=29450,trainer.max_epochs=1,trainer/lr_scheduler=cosine,trainer/optimizer=adam
     id: ???
     num: ???
     config_name: config
@@ -162,17 +162,17 @@ hydra:
       trainer/optimizer: adam
       trainer/criterion: mse
       model: Cond_hpx_unet
-      model/modules/decoder@model.decoder: unet_dec
+      model/modules/decoder@model.decoder: unet_dec_Modern
       model/modules/blocks@model.decoder.output_layer: output_layer
       model/modules/blocks/activation@model.decoder.output_layer.activation: null
       model/modules/blocks@model.decoder.recurrent_block: null
       model/modules/blocks@model.decoder.up_sampling_block: transposed_conv_upsample
       model/modules/activations@model.decoder.up_sampling_block.activation: capped_gelu
-      model/modules/blocks@model.decoder.conv_block: basic_conv_block
+      model/modules/conditional_blocks@model.decoder.conv_block: modern_residual_block
       model/modules/activations@model.decoder.conv_block.activation: capped_gelu
-      model/modules/encoder@model.encoder: Cond_unet_enc
+      model/modules/encoder@model.encoder: Cond_unet_enc_Modern
       model/modules/blocks@model.encoder.down_sampling_block: avg_pool
-      model/modules/conditional_blocks@model.encoder.conv_block: basic_conv_block
+      model/modules/conditional_blocks@model.encoder.conv_block: modern_residual_block
       model/modules/activations@model.encoder.conv_block.activation: capped_gelu
       data: era5_hpx64_1var_24h_24h
       data/splits: default

@@ -502,7 +502,6 @@ class Trainer():
                     train_loss = self.static_loss_train
                 else:
                     # THIS IS WHAT WE DO, SINCE NO DISTRIBUTED TRAINING IS USED
-                    print("NO TRAINING GRAPH??")
                     # zero grads
                     self.model.zero_grad(set_to_none=True)
 

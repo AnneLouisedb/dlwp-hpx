@@ -185,22 +185,26 @@ class HEALPixUNet(th.nn.Module):
         # Build the model layers
         self.fold = FoldFaces()
         self.unfold = UnfoldFaces(num_faces=12)
+        self.hidden_channels = encoder.n_channels[0] #not sure about this
+        time_embed_dim = self.hidden_channels * 4 # number of hidden channels times 4?
         self.encoder = instantiate(config=encoder,
                                    input_channels=self._compute_input_channels(),
                                    enable_nhwc=self.enable_nhwc,
-                                   enable_healpixpad=self.enable_healpixpad)
+                                   enable_healpixpad=self.enable_healpixpad,
+                                   time_embed_dim = time_embed_dim)
         self.encoder_depth = len(self.encoder.n_channels)
         self.decoder = instantiate(config=decoder,
                                    output_channels=self._compute_output_channels(),
                                    enable_nhwc = self.enable_nhwc,
                                    enable_healpixpad = self.enable_healpixpad)
-        self.hidden_channels = self.encoder.n_channels[0]
-        time_embed_dim = self.hidden_channels #* 4 # number of hidden channels times 4?
+        
         # hidden channels == fourier dimensions
         self.time_embed = th.nn.Sequential(
             th.nn.Linear(4, time_embed_dim),
             self.encoder.activation,
             th.nn.Linear(time_embed_dim, time_embed_dim),)
+        print("TIME embedding transform")
+        print(self.time_embed)
         
     @property
     def integration_steps(self):
@@ -293,15 +297,15 @@ class HEALPixUNet(th.nn.Module):
                 # hidden channels is the dimenasion of the output?
                 # time is a tensor of length batch size
                 fourier =fourier_embedding(time, 4, device = input_tensor.device)
-               # print('dims', fourier.shape) #([192, 4])
-                #time_emb = self.time_embed(fourier)# errror here! we ned 192, 4, 32, 32
-                time_emb = fourier
-               # print("did we get time embeddings?", time_emb.shape) # ([192, 136])
-                # Time embedings shape torch.Size([16, 136])
-                # made a random b torch.Size([192, 136, 32, 32]) -> 16x12, 136, 32, 32
-                #print(f"Reshaped Input tensor")
-                #print(f"{input_tensor.shape}")
-                # time_emb has to be a tensor as an input right??
+                
+                print('dims', fourier.shape) 
+                time_emb = self.time_embed(fourier) # errror here! we ned 192, 4, 32, 32
+                print(time_emb.shape)
+                
+                #print("reshape,",time_emb.shape)
+
+                # reshape, torch.Size([192, 1024, 1, 1])
+                
                 encodings = self.encoder(input_tensor, time_emb)
                 decodings = self.decoder(encodings, time_emb)
             else:
