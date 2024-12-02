@@ -154,6 +154,9 @@ class ConditionalResidualBlock(ConditionedBlock):
         use_scale_shift_norm (bool): Whether to use scale and shift approach to conditoning (also termed as `AdaGN`).
         n_dims (int): Number of spatial dimensions. Defaults to 1.
         # TO DO FINISH DOCSTRING
+
+    Note:
+        This conditional residual block is used in the Modern U-Net, PDE-REfiner paper. (Figure 10: ResNet block of the Modern U-Net)
     """
     def __init__(
         self,
@@ -171,7 +174,7 @@ class ConditionalResidualBlock(ConditionedBlock):
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
         use_scale_shift_norm: bool = False, # n_dims = 1
-        norm: bool = False, 
+        norm: bool = True, 
         n_groups: int = 32
         ):
         super().__init__()
@@ -226,7 +229,17 @@ class ConditionalResidualBlock(ConditionedBlock):
         self.cond_emb = th.nn.Linear(cond_channels_emb, 2 * out_channels if use_scale_shift_norm else out_channels)
 
     def forward(self, x: th.Tensor, emb: th.Tensor, cond: th.Tensor = None):
-        # First convolution layer
+        """
+        1. GroupNorm
+        2. GELU
+        3. Convolution
+        4. Groupnorm
+        5. Scale-and-Shift (conditioning features)
+        6. GELU
+        7. Convolution
+        8. +Adding residual input (shortcut)
+        """
+        # Step 1 - 3
         if cond:
             h = self.conv1(self.activation(self.norm1(th.cat([x, cond], dim=1))))
         else:
@@ -238,14 +251,17 @@ class ConditionalResidualBlock(ConditionedBlock):
             emb_out = emb_out[..., None]
 
         if self.use_scale_shift_norm:
+            # Step 4 - 5
             scale, shift = th.chunk(emb_out, 2, dim=1)
             h = self.norm2(h) * (1 + scale) + shift  # where we do -1 or +1 doesn't matter
+            # Step 6 -7
             h = self.conv2(self.activation(h))
         else:
+            # Step 4 - 7
             h = h + emb_out
-            # Second convolution layer
             h = self.conv2(self.activation(self.norm2(h)))
-        # Add the shortcut connection and return
+       
+        # Step 8
         return h + self.shortcut(x)
     
    

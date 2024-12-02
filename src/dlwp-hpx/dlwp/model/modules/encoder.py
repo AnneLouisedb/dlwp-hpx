@@ -85,6 +85,21 @@ class ConditionalUNetEncoder(th.nn.Module):
     """
     UNet3Encoder that can be applied to arbitrary meshes. This is a Conditional Encoder based on 
     the UNet model for Denoising Diffusion Probabilistic Models (DDPM). The time step in the forward pass is the step in the diffusion proces.
+
+    Args:
+        conv_block (DictConfig): convolutional block.
+        down_sampling_block (DictConfig): down-sampling block.
+        recurrent_block (DictConfig, optional): recurrent block. Defaults to None.
+        input_channels (int): Number of input channels. Defaults to 3.
+        n_channels (Sequence): Sequence defining the number of channels at each layer of the encoder. Defaults to (16, 32, 64).
+        n_layers (Sequence): Sequence specifying the number of layers in each stage of the encoder. Defaults to (2, 2, 1).
+        dilations (list, optional): List of dilation rates for convolutional layers. Defaults to None.
+        enable_nhwc (bool): Flag to enable NHWC data format. Defaults to False.
+        enable_healpixpad (bool): Flag to enable Healpix padding. Defaults to False.
+
+    Note:
+        This 'conditional' encoder takes time embeddings in the forward pass. 
+
     """
     def __init__(
             self,
@@ -110,7 +125,7 @@ class ConditionalUNetEncoder(th.nn.Module):
         # Build encoder
         old_channels = input_channels
         self.encoder = []
-        for n, curr_channel in enumerate(n_channels):
+        for n, curr_channel in enumerate(n_channels): 
             modules = list()
             # no pooling at the first channel?
             if n > 0:
@@ -123,16 +138,13 @@ class ConditionalUNetEncoder(th.nn.Module):
             else:
                 down_pool_module = None
             
-            # Adding a convolution block
-            # Cappe GELU activation and
-            # ConvNEXT block
             modules.append(instantiate(
                 config=conv_block,
                 in_channels=old_channels,
                 latent_channels=curr_channel,
                 out_channels=curr_channel,
                 dilation=dilations[n],
-                n_layers=n_layers[n],
+                n_layers=n_layers[n], # number of layers in this convolutional block?
                 enable_nhwc=enable_nhwc,
                 enable_healpixpad=enable_healpixpad,
                 ))
@@ -149,6 +161,7 @@ class ConditionalUNetEncoder(th.nn.Module):
         outputs = []
     
         for layer in self.encoder:
+            # if the layer contains a sequence
             if isinstance(layer, th.nn.Sequential):
                 sequential_output = inputs
                 for sublayer in layer:
@@ -157,6 +170,7 @@ class ConditionalUNetEncoder(th.nn.Module):
                     else:
                         sequential_output = sublayer(sequential_output)
                 outputs.append(sequential_output)
+            # if it is a layer apply the simple layer
             else:
                 outputs.append(layer(inputs))
             
