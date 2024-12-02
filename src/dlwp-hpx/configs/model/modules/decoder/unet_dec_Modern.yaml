@@ -4,7 +4,7 @@ defaults:
   - /model/modules/blocks@recurrent_block: null
   - /model/modules/blocks@output_layer: output_layer
 
-_target_: dlwp.model.models.unet.UNetDecoder
+_target_: dlwp.model.modules.decoder.ConditionalUNetDecoder 
 _recursive_: false
 n_channels:
   - 1024

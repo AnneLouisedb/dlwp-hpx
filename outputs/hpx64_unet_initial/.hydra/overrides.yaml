@@ -4,8 +4,8 @@
 - batch_size=16
 - experiment_name=hpx64_unet_initial
 - model=Cond_hpx_unet
-- model.encoder.n_channels=[136,68,34]
-- model.decoder.n_channels=[34,68,136]
+- model.encoder.n_channels=[256,128,64]
+- model.decoder.n_channels=[64,128,256]
 - trainer.max_epochs=1
 - data=era5_hpx64_1var_24h_24h
 - data.prefix=era5_1deg_1D_HPX32_1940-2024_

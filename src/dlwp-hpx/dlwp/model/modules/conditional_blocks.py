@@ -178,8 +178,9 @@ class ConditionalResidualBlock(ConditionedBlock):
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
         use_scale_shift_norm: bool = False, # n_dims = 1
-        norm: bool = True, 
-        n_groups: int = 32
+        norm: bool = False, 
+        n_groups: int = 32,
+        n_layers = None,
         ):
         super().__init__()
 

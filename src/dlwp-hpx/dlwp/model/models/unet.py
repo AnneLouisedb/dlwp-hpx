@@ -8,8 +8,8 @@ import torch as th
 import pandas as pd
 import math
 from dlwp.model.modules.healpix import HEALPixPadding, HEALPixLayer
-from dlwp.model.modules.encoder import UNetEncoder, UNet3Encoder
-from dlwp.model.modules.decoder import UNetDecoder, UNet3Decoder
+from dlwp.model.modules.encoder import UNetEncoder, UNet3Encoder, ConditionalUNetEncoder
+from dlwp.model.modules.decoder import UNetDecoder, UNet3Decoder, ConditionalUNetDecoder
 from dlwp.model.modules.blocks import FoldFaces, UnfoldFaces
 from dlwp.model.modules.losses import LossOnStep
 from dlwp.model.modules.utils import Interpolate
@@ -303,11 +303,10 @@ class HEALPixUNet(th.nn.Module):
                 #print(f"{input_tensor.shape}")
                 # time_emb has to be a tensor as an input right??
                 encodings = self.encoder(input_tensor, time_emb)
+                decodings = self.decoder(encodings, time_emb)
             else:
                 encodings = self.encoder(input_tensor)
-
-
-            decodings = self.decoder(encodings)
+                decodings = self.decoder(encodings)
             #reshaped = self._reshape_outputs(decodings)  # Absolute prediction
             reshaped = self._reshape_outputs(input_tensor[:, :self.input_channels*self.input_time_dim] + decodings)  # Residual prediction
             outputs.append(reshaped)
