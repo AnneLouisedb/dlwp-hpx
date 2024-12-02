@@ -140,6 +140,11 @@ class MiddleBlock(ConditionedBlock):
         return x
 
 
+
+        
+
+
+
 # Conditional Residual block for the Modern Unet used in the PDE-REfiner
 class ConditionalResidualBlock(ConditionedBlock):
     """Wide Residual Blocks used in modern Unet architectures.
@@ -167,7 +172,6 @@ class ConditionalResidualBlock(ConditionedBlock):
         kernel_size: int = 3,
         dilation: int = 1,
         upscale_factor: int = 4,
-        n_layers: int = 1,
         cond_channels_main: int = 0, #4,
         cond_channels_emb: int = 4, #4,
         activation: th.nn.Module = th.nn.GELU(),
@@ -263,6 +267,56 @@ class ConditionalResidualBlock(ConditionedBlock):
        
         # Step 8
         return h + self.shortcut(x)
+    
+
+# class ModernConvBlock(ConditionedBlock):
+#     """Convolution block used in modern Unet architectures. 
+#     Jayesh K Gupta and Johannes Brandstetter. 2022. Towards Multi-spatiotemporal-scale Generalized PDE Modeling. arXiv preprint arXiv:2209.15616."""
+#     def __init__(
+#             self,
+#             geometry_layer: th.nn.Module = HEALPixLayer,
+#             in_channels: int = 3,
+#             out_channels: int = 1,
+#             kernel_size: int = 3,
+#             dilation: int = 1,
+#             n_layers: int = 2,
+#             latent_channels: int = None,
+#             activation: th.nn.Module = None,
+#             enable_nhwc: bool = False,
+#             enable_healpixpad: bool = False
+#             ):
+#         super().__init__()
+
+#         self.n_layers = n_layers
+
+#         self.conv1 = geometry_layer(
+#             layer='torch.nn.Conv2d',
+#             in_channels=in_channels,
+#             out_channels=out_channels,
+#             kernel_size=kernel_size,
+#             dilation=dilation,
+#             enable_nhwc=enable_nhwc,
+#             enable_healpixpad=enable_healpixpad,
+            
+#         )
+
+#         self.res1 = ConditionalResidualBlock(
+#             geometry_layer =  geometry_layer,
+#             in_channels=  in_channels,
+#             latent_channels = latent_channels,
+#             out_channels = out_channels,
+#             kernel_size = kernel_size)
+        
+            
+
+#     def forward(self, x: th.Tensor, time_emb: th.Tensor) -> th.Tensor:
+#         x  = self.conv1(x)
+
+#         for _ in range(self.n_layers):
+#             x = self.res1(x, time_emb)
+        
+#         return x
+
     
    
 class BasicConvBlock(ConditionedBlock):

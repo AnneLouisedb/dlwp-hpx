@@ -1,0 +1,9 @@
+defaults:
+  - /model/modules/activations@activation: capped_gelu
+
+_target_: dlwp.model.modules.conditional_blocks.ConditionalResidualBlock
+_recursive_: true
+in_channels: 300
+out_channels: 1
+kernel_size: 3
+dilation: 1

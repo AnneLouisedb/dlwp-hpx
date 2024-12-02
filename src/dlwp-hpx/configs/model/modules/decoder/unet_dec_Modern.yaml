@@ -1,0 +1,23 @@
+defaults:
+  - /model/modules/conditional_blocks@conv_block: modern_residual_block 
+  - /model/modules/blocks@up_sampling_block: transposed_conv_upsample
+  - /model/modules/blocks@recurrent_block: null
+  - /model/modules/blocks@output_layer: output_layer
+
+_target_: dlwp.model.models.unet.UNetDecoder
+_recursive_: false
+n_channels:
+  - 1024
+  - 256
+  - 128
+  - 64
+n_layers:
+  - 1
+  - 2
+  - 2
+  - 2
+dilations:
+  - 1
+  - 1
+  - 1
+  - 1

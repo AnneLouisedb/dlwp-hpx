@@ -440,8 +440,11 @@ class AvgPool(th.nn.Module):
             enable_nhwc=enable_nhwc,
             enable_healpixpad=enable_healpixpad
             )
+       
     def forward(self, x):
         return self.avgpool(x)
+    
+
 
 
 class LearnedPool(th.nn.Module):

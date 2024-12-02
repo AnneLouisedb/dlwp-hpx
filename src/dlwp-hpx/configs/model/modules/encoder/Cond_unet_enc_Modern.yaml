@@ -1,0 +1,21 @@
+defaults:
+  - /model/modules/conditional_blocks@conv_block: modern_residual_block 
+  - /model/modules/blocks@down_sampling_block: avg_pool # this has to be avg_pool with kernel size 3?
+
+_target_: dlwp.model.modules.encoder.ConditionalUNetEncoder
+_recursive_: false
+n_channels: # default parameters used in the PDEREFINER paper
+  - 64
+  - 128
+  - 256
+  - 1024
+n_layers:
+  - 2
+  - 2
+  - 2
+  - 2
+dilations:
+  - 1
+  - 1
+  - 1
+  - 1

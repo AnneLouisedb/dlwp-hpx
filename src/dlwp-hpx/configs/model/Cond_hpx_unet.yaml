@@ -1,6 +1,6 @@
 defaults:
-  - modules/encoder@encoder: Cond_unet_enc
-  - modules/decoder@decoder: unet_dec
+  - modules/encoder@encoder: Cond_unet_enc_Modern
+  - modules/decoder@decoder: unet_dec_Modern
 
 
 _target_: dlwp.model.models.unet.HEALPixUNet
