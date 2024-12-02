@@ -3,6 +3,7 @@ import gc
 import os
 import sys
 import threading
+import healpy as hp
 import random
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,7 +18,7 @@ from typing import List
 # amp
 from torch.cuda import amp
 from torch.optim.lr_scheduler import _LRScheduler
-
+from remap.healpix import HEALPixRemap
 
 # distributed stuff
 import torch.distributed as dist
@@ -363,15 +364,7 @@ class Trainer():
         elif isinstance(inputs, torch.Tensor):
             # Generate a random tensor with the same shape and type as the input tensor
             y_noised = torch.randn_like(inputs, device=self.device)
-        
-   
-        #y_noised = torch.randn((16, 12, 4, 1, 32, 32), device=self.device)
-
-        # shape noised torch.Size([192, 4, 32, 32])
-        # inputs shape 1 torch.Size([16, 12, 6, 1, 32, 32])
-        print("shape noised", y_noised.shape)
-        #print("inputs shape 1", inputs[1].shape)
-
+        storing = []
         for k_scalar in self.scheduler.timesteps:
             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
@@ -380,11 +373,34 @@ class Trainer():
             x_in = [inputs[0], x_in]
 
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) # pred dimensions? NEED torch.Size([16, 12, 4, 1, 32, 32])
-            print("pred dimensions? NEED", pred.shape)
-
+            
+            storing.append(pred)
+            
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
 
         y = y_noised
+
+        remapper = HEALPixRemap(
+        latitudes=181,
+        longitudes=360,
+        nside=32
+        )
+
+        for idx, image in enumerate(storing):
+            
+            
+            # Step 2: Extract the first item
+            first_item = image[0]  # Shape: [12, 1, 1, 32, 32]
+
+            # Step 3: Squeeze unnecessary dimensions (if needed)
+            first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
+
+            remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"{idx}")
+
+            print(f"Images saved to directory.")
+                    
+
+        
 
         return y 
            

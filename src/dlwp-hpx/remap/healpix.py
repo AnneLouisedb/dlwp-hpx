@@ -27,19 +27,20 @@ Details on the HEALPix can be found at https://iopscience.iop.org/article/10.108
 import os
 from tqdm import tqdm
 import multiprocessing
-
+import torch
 import numpy as np
 import healpy as hp
 import xarray as xr
 import reproject as rp
 import astropy as ap
+import matplotlib.pyplot as plt
 
 # https://stackoverflow.com/questions/57354700/starmap-combined-with-tqdm/57364423#57364423
-from istarmap import istarmap
-from base import _BaseRemap
-from cubesphere import to_chunked_dataset
+from remap.istarmap import istarmap
+from remap.base import _BaseRemap
+from remap.cubesphere import to_chunked_dataset
 
-import matplotlib.pyplot as plt
+
 
 def fill_nan_with_mean(data):
     # Calculate the mean of non-NaN values
@@ -400,7 +401,7 @@ class HEALPixRemap(_BaseRemap):
 
         return hpx3d
 
-    def hpx2ll(self, data: np.array, visualize: bool = False, **kwargs) -> np.array:
+    def hpx2ll(self, data: np.array, visualize: bool = False, title = None, **kwargs) -> np.array:
         """
         Projects a given three dimensional HEALPix array to latitude longitude representation.
 
@@ -428,7 +429,10 @@ class HEALPixRemap(_BaseRemap):
             plt.imshow(ll2d, **kwargs)
             plt.title("HPX mapped to LL")
             plt.tight_layout()
-            plt.savefig("hpx2ll.pdf", format="pdf")
+            if title:
+                plt.savefig(f"hpx2ll_{title}.pdf", format="pdf")
+            else:
+                plt.savefig("hpx2ll.pdf", format="pdf")
 
         assert ll2d_mask.all(), ("Found NaN in the projected data. This can occur when the resolution of the "
                                  "HEALPix data is smaller than that of the target latlon grid.")
@@ -622,9 +626,9 @@ if __name__ == "__main__":
     # only take the frame for 2012 to 2013
 
     # Select data from 2012 to 2013
-    data_array_subset = data_array.sel(time=slice('2012-01-01', '2013-12-31'))
+    #data_array_subset = data_array.sel(time=slice('2012-01-01', '2013-12-31'))
 
-    pyhonImage = gif(data_array_subset, to="temperature_animation.gif")
+   # pyhonImage = gif(data_array_subset, to="temperature_animation.gif")
 
     # savve this  GIf in current folder
 
@@ -651,6 +655,21 @@ if __name__ == "__main__":
     #ds = ds.resample(time="W").mean()
 
     print('Data resampled..')
+    # Example of how to convert an ERA5 LatLon file to HEALPix and a forecast from HEALPix to LatLon
+    remapper = HEALPixRemap(
+        latitudes=181,
+        longitudes=360,
+        nside=32
+    )
+    data = torch.randn(16, 12, 1, 1, 32, 32)  # Example tensor for demonstration
+
+    # Step 2: Extract the first item
+    first_item = data[0]  # Shape: [12, 1, 1, 32, 32]
+
+    # Step 3: Squeeze unnecessary dimensions (if needed)
+    first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
+
+    remapper.hpx2ll(first_item_squeezed,  visualize = True)
     # print begin time and end time of this dataset
 
     # Get and print the start and end times

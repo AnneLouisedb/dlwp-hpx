@@ -203,8 +203,6 @@ class HEALPixUNet(th.nn.Module):
             th.nn.Linear(self.hidden_channels, time_embed_dim),
             self.encoder.activation,
             th.nn.Linear(time_embed_dim, time_embed_dim),)
-        print("TIME embedding transform")
-        print(self.time_embed)
         
     @property
     def integration_steps(self):
@@ -295,15 +293,7 @@ class HEALPixUNet(th.nn.Module):
             if time is not None:
                 
                 fourier =fourier_embedding(time, self.hidden_channels, device = input_tensor.device)
-                
-                print('dims', fourier.shape) 
                 time_emb = self.time_embed(fourier) 
-                print(time_emb.shape)
-                
-                #print("reshape,",time_emb.shape)
-
-                # reshape, torch.Size([192, 1024, 1, 1])
-                
                 encodings = self.encoder(input_tensor, time_emb)
                 decodings = self.decoder(encodings, time_emb)
             else:
