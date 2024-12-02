@@ -10,6 +10,9 @@ tau300-700:
 t2m0:
   mean: 0.
   std: 1.
+t2m:
+  mean: 0.
+  std: 1.
 tcwv0:
   mean: 0.
   std: 1.

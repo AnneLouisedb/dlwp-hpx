@@ -580,10 +580,10 @@ class TimeSeriesDataset(Dataset):
                                       self.spatial_dims, dtype='float32')
 
         # Get buffers for the batches, which we'll fill in iteratively.
-        inputs = np.empty((this_batch, self.input_time_dim, self.ds.dims['channel_in']) +
-                          self.spatial_dims, dtype='float32')
+        inputs = np.empty((this_batch, self.input_time_dim, self.ds.sizes['channel_in']) +
+                          self.spatial_dims, dtype='float32') # sizes has ben changes from .dims[]
         if not self.forecast_mode:
-            targets = np.empty((this_batch, self.output_time_dim, self.ds.dims['channel_out']) +
+            targets = np.empty((this_batch, self.output_time_dim, self.ds.sizes['channel_out']) +
                                self.spatial_dims, dtype='float32')
 
         # Iterate over valid sample windows

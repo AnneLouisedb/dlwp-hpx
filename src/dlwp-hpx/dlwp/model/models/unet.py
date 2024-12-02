@@ -6,13 +6,14 @@ from omegaconf import DictConfig
 import numpy as np
 import torch as th
 import pandas as pd
-
+import math
 from dlwp.model.modules.healpix import HEALPixPadding, HEALPixLayer
 from dlwp.model.modules.encoder import UNetEncoder, UNet3Encoder
 from dlwp.model.modules.decoder import UNetDecoder, UNet3Decoder
 from dlwp.model.modules.blocks import FoldFaces, UnfoldFaces
 from dlwp.model.modules.losses import LossOnStep
 from dlwp.model.modules.utils import Interpolate
+from dlwp.model.modules.utils import fourier_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ class CubeSphereUNet(th.nn.Module):
     def _reshape_outputs(self, outputs: th.Tensor) -> th.Tensor:
         shape = tuple(outputs.shape)
         return outputs.view(shape[0], 1 if self.is_diagnostic else self.input_time_dim, -1, *shape[2:])
+    
 
     def forward(self, inputs: Sequence, output_only_last=False) -> th.Tensor:
         # Reshape required for compatibility of CubedSphere model with modified dataloader
@@ -192,7 +194,14 @@ class HEALPixUNet(th.nn.Module):
                                    output_channels=self._compute_output_channels(),
                                    enable_nhwc = self.enable_nhwc,
                                    enable_healpixpad = self.enable_healpixpad)
-
+        self.hidden_channels = self.encoder.n_channels[0]
+        time_embed_dim = self.hidden_channels #* 4 # number of hidden channels times 4?
+        # hidden channels == fourier dimensions
+        self.time_embed = th.nn.Sequential(
+            th.nn.Linear(4, time_embed_dim),
+            self.encoder.activation,
+            th.nn.Linear(time_embed_dim, time_embed_dim),)
+        print('time embedding transform', self.time_embed)
     @property
     def integration_steps(self):
         return max(self.output_time_dim // self.input_time_dim, 1)
@@ -260,34 +269,58 @@ class HEALPixUNet(th.nn.Module):
         res = th.reshape(outputs, shape=(shape[0], shape[1], 1 if self.is_diagnostic else self.input_time_dim, -1, *shape[3:]))
         
         return res
+    
 
-    def forward(self, inputs: Sequence, output_only_last=False) -> th.Tensor:
+    def forward(self, inputs: Sequence, time: th.Tensor = None, z: th.Tensor= None, output_only_last=False) -> th.Tensor:
 
         outputs = []
         #import time
         #times = []
-        for step in range(self.integration_steps):
+        for step in range(self.integration_steps): # [B, F, C*T, H, W]
             if step == 0:
                 inputs_0 = inputs[0]
-                input_tensor = self._reshape_inputs(inputs, step)
+                print("first attempt at reshape", inputs[0].shape, inputs[1].shape) # ([12, 12, 1, 32, 32]) torch.Size([12, 12, 1, 32, 32]) -> T = 12 since we have 2 * 2 as input and 2 * 4 as output
+                input_tensor = self._reshape_inputs(inputs, step) # Squashes the time/channel dimension and concatenates in constants and decoder inputs. (would decoder inputs be 4?)
+               # N, F, C, H, W -> N*F, C, H, W
+                print("reshaping input tensor", input_tensor.shape) # ([192, 4, 32, 32]) -> 12 x 16 = 192 #  (B*F, T*C, H, W)
+                
             else:
                 inputs_0 = outputs[-1]
                 input_tensor = self._reshape_inputs([outputs[-1]] + list(inputs[1:]), step)
-            
-            encodings = self.encoder(input_tensor)
+                print("reshaping input tensor SECOND", input_tensor.shape) # ([192, 4, 32, 32])
+
+            if time is not None:
+                # hidden channels is the dimenasion of the output?
+                # time is a tensor of length batch size
+                fourier =fourier_embedding(time, 4, device = input_tensor.device)
+                print('dims', fourier.shape) #([192, 4])
+                #time_emb = self.time_embed(fourier)# errror here! we ned 192, 4, 32, 32
+                time_emb = fourier
+                print("did we get time embeddings?", time_emb.shape) # ([192, 136])
+                # Time embedings shape torch.Size([16, 136])
+                # made a random b torch.Size([192, 136, 32, 32]) -> 16x12, 136, 32, 32
+                print(f"Reshaped Input tensor")
+                print(f"{input_tensor.shape}")
+                # time_emb has to be a tensor as an input right??
+                encodings = self.encoder(input_tensor, time_emb)
+            else:
+                encodings = self.encoder(input_tensor)
+
+
             decodings = self.decoder(encodings)
             #reshaped = self._reshape_outputs(decodings)  # Absolute prediction
             reshaped = self._reshape_outputs(input_tensor[:, :self.input_channels*self.input_time_dim] + decodings)  # Residual prediction
             outputs.append(reshaped)
-            
+
+  
         if output_only_last:
             res = outputs[-1]
         else:
             res = th.cat(outputs, dim=self.channel_dim)
 
         return res
-
-
+    
+   
 class HEALPixRecUNet(th.nn.Module):
     def __init__(
             self,
@@ -340,6 +373,7 @@ class HEALPixRecUNet(th.nn.Module):
         self.presteps = presteps
         self.enable_nhwc = enable_nhwc
         self.enable_healpixpad = enable_healpixpad
+        
 
         # Number of passes through the model, or a diagnostic model with only one output time
         self.is_diagnostic = self.output_time_dim == 1 and self.input_time_dim > 1
@@ -359,6 +393,14 @@ class HEALPixRecUNet(th.nn.Module):
                                    output_channels=self._compute_output_channels(),
                                    enable_nhwc = self.enable_nhwc,
                                    enable_healpixpad = self.enable_healpixpad)
+        
+        
+        hidden_channels = self.encoder.n_channels[-1]
+        time_embed_dim = hidden_channels * 4 # number of hidden channels times 4?
+        self.time_embed = th.nn.Sequential(
+            th.nn.Linear(hidden_channels, time_embed_dim),
+            self.encoder.activation,
+            th.nn.Linear(time_embed_dim, time_embed_dim),)
 
     @property
     def integration_steps(self):
@@ -378,7 +420,7 @@ class HEALPixRecUNet(th.nn.Module):
         :param step: step number in the sequence of integration_steps
         :return: reshaped Tensor in expected shape for model encoder
         """
-
+       
         if not (self.n_constants > 0 or self.decoder_input_channels > 0):
             return self.fold(prognostics)
 
@@ -416,6 +458,7 @@ class HEALPixRecUNet(th.nn.Module):
                 ),  # DI
             inputs[2].expand(*tuple([inputs[0].shape[0]] + len(inputs[2].shape) * [-1]))  # constants
         ]
+        
         res = th.cat(result, dim=self.channel_dim)
 
         # fold faces into batch dim
@@ -449,18 +492,24 @@ class HEALPixRecUNet(th.nn.Module):
                     inputs=[outputs[s-1]] + list(inputs[1:]),
                     step=s+1
                     )
+            
             # Forward the data through the model to initialize hidden states
             self.decoder(self.encoder(input_tensor))
 
-    def forward(self, inputs: Sequence, output_only_last=False) -> th.Tensor:
+    def forward(self, inputs: Sequence, time: th.Tensor = None, z: th.Tensor= None, output_only_last=False) -> th.Tensor:
+        """Forwarding the UNET in its entirity. This forward function should take the inputs, time and z (for a conditional model)"""
+        assert not (time is None and z is None)
+
         self.reset()
         outputs = []
+        
         for step in range(self.integration_steps):
-
-
+            
             # (Re-)initialize recurrent hidden states
             if (step*(self.delta_t*self.input_time_dim)) % self.reset_cycle == 0:
                 self._initialize_hidden(inputs=inputs, outputs=outputs, step=step)
+                # code does not reach here
+                
             
             # Construct input: [prognostics|TISR|constants]
             if step == 0:
@@ -474,9 +523,19 @@ class HEALPixRecUNet(th.nn.Module):
                     inputs=[outputs[-1]] + list(inputs[1:]),
                     step=step+self.presteps
                     )
+                
+            if time is not None:
+                hidden_channels = self.encoder.n_channels[-1]
+                time_emb = self.time_embed(fourier_embedding(time, hidden_channels, device = input_tensor.device))
+                th.cuda.nvtx.range_push(f"Forward encoder with diffusion")  
+                encodings = self.encoder(input_tensor, time_emb)
+            else:
+                encodings = self.encoder(input_tensor)
 
-            encodings = self.encoder(input_tensor)
+
             decodings = self.decoder(encodings)
+
+            
             # Absolute prediction
             #reshaped = self._reshape_outputs(decodings)
             # Residual prediction
@@ -485,7 +544,8 @@ class HEALPixRecUNet(th.nn.Module):
 
         if output_only_last:
             return outputs[-1]
-
+        print
+        
         return th.cat(outputs, dim=self.channel_dim)
 
     def reset(self):

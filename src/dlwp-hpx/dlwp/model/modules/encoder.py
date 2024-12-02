@@ -3,9 +3,12 @@ from typing import Any, Dict, Optional, Sequence, Union
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 import torch as th
+import math
+from abc import abstractmethod
 
 from dlwp.model.modules.cube_sphere import CubeSpherePadding, CubeSphereLayer
-
+from dlwp.model.modules.activations import CappedGELU
+from dlwp.model.modules.utils import ConditionedBlock
 
 class CubeSphereUNetEncoder(th.nn.Module):
     def __init__(
@@ -77,6 +80,93 @@ class CubeSphereUNetEncoder(th.nn.Module):
             inputs = outputs[-1]
         return outputs
 
+
+class ConditionalUNetEncoder(th.nn.Module):
+    """
+    UNet3Encoder that can be applied to arbitrary meshes. This is a Conditional Encoder based on 
+    the UNet model for Denoising Diffusion Probabilistic Models (DDPM). The time step in the forward pass is the step in the diffusion proces.
+    """
+    def __init__(
+            self,
+            conv_block: DictConfig,
+            down_sampling_block: DictConfig,
+            recurrent_block: DictConfig = None,
+            input_channels: int = 3,
+            n_channels: Sequence = (16, 32, 64),
+            n_layers: Sequence = (2, 2, 1),
+            dilations: list = None,
+            enable_nhwc: bool = False,
+            enable_healpixpad: bool = False
+    ):
+        super().__init__()
+        
+        self.n_channels = n_channels
+        self.activation = CappedGELU()
+    
+        if dilations is None:
+            # Defaults to [1, 1, 1...] in accordance with the number of unet levels
+            dilations = [1 for _ in range(len(n_channels))]
+
+        # Build encoder
+        old_channels = input_channels
+        self.encoder = []
+        for n, curr_channel in enumerate(n_channels):
+            modules = list()
+            # no pooling at the first channel?
+            if n > 0:
+                # this Average pooling with pooling == 2
+                modules.append(instantiate(
+                    config=down_sampling_block,
+                    enable_nhwc=enable_nhwc,
+                    enable_healpixpad=enable_healpixpad
+                    ))
+            else:
+                down_pool_module = None
+            
+            # Adding a convolution block
+            # Cappe GELU activation and
+            # ConvNEXT block
+            modules.append(instantiate(
+                config=conv_block,
+                in_channels=old_channels,
+                latent_channels=curr_channel,
+                out_channels=curr_channel,
+                dilation=dilations[n],
+                n_layers=n_layers[n],
+                enable_nhwc=enable_nhwc,
+                enable_healpixpad=enable_healpixpad,
+                ))
+            old_channels = curr_channel
+
+            self.encoder.append(th.nn.Sequential(*modules))
+        
+       
+        #each of these has to be conditional!
+        self.encoder = th.nn.ModuleList(self.encoder)
+
+    def forward(self, inputs: Sequence, time_emb: th.Tensor) -> Sequence:
+        # time_emb depend on the hidden features
+        outputs = []
+    
+        for layer in self.encoder:
+            if isinstance(layer, th.nn.Sequential):
+                sequential_output = inputs
+                for sublayer in layer:
+                    if isinstance(sublayer, ConditionedBlock):
+                        sequential_output = sublayer(sequential_output, time_emb)
+                    else:
+                        sequential_output = sublayer(sequential_output)
+                outputs.append(sequential_output)
+            else:
+                outputs.append(layer(inputs))
+            
+            # Update inputs for the next layer
+            inputs = outputs[-1]
+        
+        return outputs
+
+    def reset(self):
+        pass
 
 class UNetEncoder(th.nn.Module):
     """

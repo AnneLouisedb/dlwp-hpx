@@ -13,8 +13,7 @@ from torchinfo import summary
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dlwp.trainer.trainer import Trainer
-#from dlwp.trainer.trainer_dpe_refiner import RefinerTrainer
+#from dlwp.trainer.trainer import Trainer
 
 logger = logging.getLogger(__name__)
 logging.getLogger('cfgrib').setLevel(logging.ERROR)
@@ -91,11 +90,12 @@ def train(cfg):
     model.batch_size = cfg.batch_size
     model.learning_rate = cfg.learning_rate
 
-    if dist.is_initialized():
-        if dist.get_rank() == 0:
-            summary(model)
-    else:
-        summary(model)
+    #if dist.is_initialized():
+    #    if dist.get_rank() == 0:
+    #        summary(model)
+    #else:
+    
+    summary(model)
 
   
     # Instantiate PyTorch modules (with state dictionaries from checkpoint if given)

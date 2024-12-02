@@ -133,7 +133,7 @@ class HEALPixLayer(th.nn.Module):
         if enable_nhwc:
             self.layers = self.layers.to(memory_format=torch.channels_last)
 
-    def forward(self, x: th.Tensor) -> th.Tensor:
+    def forward(self, x: th.Tensor,) -> th.Tensor:
         """
         Performs the forward pass using the defined layer function and the given data.
 

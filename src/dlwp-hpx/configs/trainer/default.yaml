@@ -3,7 +3,7 @@ defaults:
   - optimizer: fused_adam
   - lr_scheduler: plateau
 
-_target_: dlwp.trainer.trainer.Trainer
+_target_: dlwp.trainer.pdetrainer.Trainer
 _recursive_: true
 max_epochs: 1
 min_epochs: 1

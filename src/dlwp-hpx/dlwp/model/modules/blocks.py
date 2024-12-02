@@ -47,7 +47,6 @@ class UnfoldFaces(th.nn.Module):
 #
 # RECURRENT BLOCKS
 #
-
 class ConvNeXtLSTMBlock(th.nn.Module):
     def __init__(
             self,

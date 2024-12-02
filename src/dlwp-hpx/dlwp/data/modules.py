@@ -234,6 +234,7 @@ class TimeSeriesDataModule():
                 drop_last=self.drop_last,
                 add_insolation=self.add_insolation
             )
+            
             self.val_dataset = TimeSeriesDataset(
                 dataset.sel(time=slice(self.splits['val_date_start'], self.splits['val_date_end'])),
                 scaling=self.scaling,

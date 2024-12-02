@@ -1,0 +1,1213 @@
+#!/usr/bin/env python3
+import gc
+import os
+import sys
+import threading
+import random
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import warnings
+from tqdm import tqdm
+from typing import Optional
+from torch.utils.tensorboard import SummaryWriter
+from torch.optim import Optimizer
+import math
+from typing import List
+# amp
+from torch.cuda import amp
+from torch.optim.lr_scheduler import _LRScheduler
+
+
+# distributed stuff
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP  
+
+# custom
+from dlwp.utils import write_checkpoint
+
+# diffusion 
+from diffusers.schedulers import DDPMScheduler
+import torch.nn.functional as F
+
+# PDEARENA - rollout function
+# def cond_rollout2d(
+#     model: torch.nn.Module,
+#     initial_u: torch.Tensor,
+#     initial_v: torch.Tensor,
+#     delta_t: Optional[torch.Tensor],
+#     cond: Optional[torch.Tensor],
+#     grid: Optional[torch.Tensor],
+#     pde: PDEDataConfig,
+#     time_history: int,
+#     num_steps: int,
+# ):
+#     traj_ls = []
+#     pred = torch.Tensor().to(device=initial_u.device)
+#     data_vector = torch.Tensor().to(device=initial_u.device)
+
+#     for i in range(num_steps):
+#         if i == 0:
+#             if pde.n_scalar_components > 0:
+#                 data_scalar = initial_u[:, :time_history]
+            
+#             data = data_scalar
+
+#         else:
+#             data = torch.cat((data, pred), dim=1)
+#             data = data[
+#                 :,
+#                 -time_history:,
+#             ]
+
+#         if grid is not None:
+#             data = torch.cat((data, grid), dim=1)
+
+#         if delta_t is not None:
+#             pred = model(data, delta_t, cond) # model takes 
+#         else:
+#             pred = model(data, cond)
+#         traj_ls.append(pred)
+
+#     traj = torch.cat(traj_ls, dim=1)
+#     return traj
+
+# These are from the PDE ARENA
+def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
+    loss = F.mse_loss(input, target, reduction="none")
+    # avg across space
+    reduced_loss = torch.mean(loss, dim=tuple(range(3, loss.ndim)))
+    # sum across time + fields
+    reduced_loss = reduced_loss.sum(dim=(1, 2))
+    # reduce along batch
+    if reduction == "mean":
+        return torch.mean(reduced_loss)
+    elif reduction == "sum":
+        return torch.sum(reduced_loss)
+    elif reduction == "none":
+        return reduced_loss
+    else:
+        raise NotImplementedError(reduction)
+
+
+class CustomMSELoss(torch.nn.Module):
+    """Custom MSE loss for PDEs.
+
+    MSE but summed over time and fields, then averaged over space and batch.
+
+    Args:
+        reduction (str, optional): Reduction method. Defaults to "mean".
+    """
+
+    def __init__(self, reduction: str = "mean") -> None:
+        super().__init__()
+        self.reduction = reduction
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return custommse_loss(input, target, reduction=self.reduction)
+
+
+class Trainer():
+    """
+    A class for DLWP model training, This class trains a model to predict th next step in a diffusion process?
+    """
+
+    def __init__(
+            self,
+            model: torch.nn.Module,  # Specify... (import)
+            data_module: torch.nn.Module,  # Specify... (import)
+            criterion: torch.nn.Module,  # Specify... (import)
+            optimizer: torch.nn.Module,  # Specify... (import)
+            lr_scheduler: torch.nn.Module,  # Specify... (import) # use warmup steps!!
+            num_refinement_steps: int = 3,
+            min_epochs: int = 100,
+            max_epochs: int = 500,
+            early_stopping_patience: int = None,
+            amp_mode: str = "none", # Training with mixed precision
+            graph_mode: str = "none",
+            device: torch.device = torch.device("cpu"),
+            output_dir: str = "/outputs/",
+            padding_mode: str = "zeros",
+            predict_difference: bool = False,
+            difference_weight: float = 1.0,
+            min_noise_std: float = 4e-7,
+            ema_decay: float = 0.995,
+            writing: bool = True
+            ):
+        """
+        Constructor.
+
+        :param model: 
+
+        :param criterion: A PyTorch loss module
+        :param optimizer: A PyTorch optimizer module
+        :param lr_scheduler: A PyTorch learning rate scheduler module
+        """
+        self.device = device
+        self.amp_enable = False if (amp_mode == "none") else True  
+        self.amp_dtype = torch.float16 if (amp_mode == "fp16") else torch.bfloat16
+        self.output_variables = data_module.output_variables
+        self.early_stopping_patience = early_stopping_patience
+
+        self.model = model.to(device=self.device) # Neural Operator
+        self.train_criterion = CustomMSELoss()
+
+        #self.ema = ExponentialMovingAverage(self.model, decay=self.hparams.ema_decay)
+        # We use the Diffusion implementation here. Alternatively, one could
+        # implement the denoising manually.
+        betas = [min_noise_std ** (k / num_refinement_steps) for k in reversed(range(num_refinement_steps + 1))]
+        # scheduling the addition of noise
+        self.scheduler = DDPMScheduler(
+            num_train_timesteps=num_refinement_steps + 1,
+            trained_betas=betas,
+            prediction_type="v_prediction", # shouldnt this be epsilon?
+            clip_sample=False,
+        )
+        # Multiplies k before passing to frequency embedding.
+        self.time_multiplier = 1000 / num_refinement_steps
+        
+        if dist.is_initialized():
+            self.dataloader_train, self.sampler_train = data_module.train_dataloader(num_shards=dist.get_world_size(),
+                                                                                     shard_id=dist.get_rank())
+            self.dataloader_valid, self.sampler_valid = data_module.val_dataloader(num_shards=dist.get_world_size(),
+                                                                                   shard_id=dist.get_rank())
+        else:
+            self.dataloader_train, self.sampler_train = data_module.train_dataloader()
+            self.dataloader_valid, self.sampler_valid = data_module.val_dataloader()
+        self.output_dir_tb = os.path.join(output_dir, "tensorboard")
+
+        # set the other parameters
+        self.optimizer = optimizer
+        self.criterion = criterion.to(device=self.device)
+        self.lr_scheduler = lr_scheduler
+        self.min_epochs = min_epochs
+        self.max_epochs = max_epochs
+
+        # add gradient scaler
+        self.gscaler = amp.GradScaler(enabled=(self.amp_enable and self.amp_dtype == torch.float16))
+
+        # use distributed data parallel if requested:
+        self.print_to_screen = True
+        self.train_graph = None
+        self.eval_graph = None
+
+        if dist.is_initialized():
+            print("initialize distributed training?..")
+
+            capture_stream = torch.cuda.Stream()
+            with torch.cuda.stream(capture_stream):
+                self.model = DDP(self.model,
+                                 device_ids = [self.device.index],
+                                 output_device = [self.device.index],
+                                 broadcast_buffers = True,
+                                 find_unused_parameters = False,
+                                 gradient_as_bucket_view = True)
+                capture_stream.synchronize()
+
+            self.print_to_screen = dist.get_rank() == 0
+
+            # capture graph if requested
+            if graph_mode in ["train", "train_eval"]:
+                if self.print_to_screen:
+                    print(f"Capturing model for training ...")
+                # get the shapes
+                inp, tar = next(iter(self.dataloader_train))
+                
+                self._train_capture(capture_stream, [x.shape for x in inp], tar.shape)
+
+                if graph_mode == "train_eval":
+                    if self.print_to_screen:
+                        print(f"Capturing model for validation ...")
+                    self._eval_capture(capture_stream)
+        else:
+            print("DIST is NOT initialized!")
+
+        # Set up tensorboard summary_writer or try 'weights and biases'
+        # Initialize tensorbaord to track scalars
+        if writing:
+            if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                self.writer = SummaryWriter(log_dir=self.output_dir_tb)
+    
+
+    # Make sure this code aligns!!         
+    def compute_rolloutloss(self, batch, ):
+        (u, v, cond, grid) = batch
+
+        losses = {k: [] for k in self.rollout_criterions.keys()}
+        for start in range(0, self.max_start_time + 1, self.hparams.time_future + 1):
+
+            end_time = start + self.hparams.time_history
+            target_start_time = end_time + 1 # time step
+            target_end_time = target_start_time + self.hparams.time_future * self.hparams.max_num_steps
+
+            # input sequence
+            init_u = u[:, start:end_time, ...]
+            # ground truth sequence
+            targ_u = u[:, target_start_time:target_end_time, ...]
+
+            init_v = None
+            targ_traj = targ_u
+
+            pred_traj = cond_rollout2d(
+                self,
+                init_u,
+                init_v,
+                None,
+                cond,
+                grid,
+                self.pde,
+                self.hparams.time_history,
+                min(targ_u.shape[1], self.hparams.max_num_steps),
+            )
+
+            for k, criterion in self.rollout_criterions.items():
+                loss = criterion(pred_traj, targ_traj)
+                loss = loss.mean(dim=(0,) + tuple(range(2, loss.ndim)))
+                losses[k].append(loss)
+        loss_vecs = {k: sum(v) / max(1, len(v)) for k, v in losses.items()}
+        return loss_vecs
+
+
+    def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
+        """This is a single training step in the cuda stream"""
+        # perform graph capture of the model
+
+        self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
+        self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
+        # Multiplies k before passing to frequency embedding.
+        
+        self.model.train()
+        capture_stream.wait_stream(torch.cuda.current_stream())
+        # define the number of refinementss
+        
+        # this is the original k + 1 (number of training steps)
+        k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
+
+        with torch.cuda.stream(capture_stream):
+            for _ in range(num_warmup_steps):                
+                self.model.zero_grad(set_to_none=True)
+
+                # FW
+                with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+
+                    noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+                    noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
+
+                    signal_factor = 1 - noise_factor
+
+                    noise = torch.randn_like(self.static_tar)
+                    
+                    y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
+
+                    x_in = torch.cat([self.static_inp, y_noised], axis=1)
+
+                    pred = self.model(x_in, time=k * self.time_multiplier)
+                     
+                    target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
+
+                    self.static_loss_train= self.train_criterion(pred, target)
+                    
+                    
+                # Backward
+                self.gscaler.scale(self.static_loss_train).backward()
+            
+            # sync here
+            capture_stream.synchronize()
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            # create graph
+            self.train_graph = torch.cuda.CUDAGraph()
+
+            # zero grads before capture:
+            self.model.zero_grad(set_to_none=True)
+
+            # start capture
+            with torch.cuda.graph(self.train_graph):
+
+                # FW
+                with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+                    
+                    noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+                    noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
+
+                    signal_factor = 1 - noise_factor
+
+                    noise = torch.randn_like(self.static_tar)
+                    
+                    y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
+
+                    x_in = torch.cat([self.static_inp, y_noised], axis=1)
+
+                    pred = self.model(x_in, time=k * self.time_multiplier)
+                     
+                    target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
+
+                    self.static_loss_train= self.train_criterion(pred, target)
+
+                # BW
+                self.gscaler.scale(self.static_loss_train).backward()
+
+        # wait for capture to finish
+        torch.cuda.current_stream().wait_stream(capture_stream)
+    
+    def predict_next_solution(self, inputs):
+        """ This should be called once the model is trained! Call in the evaluation!"""
+        if isinstance(inputs, list):
+            # Get the first element of the list
+            first_element = inputs[-1]
+            # Generate a random tensor with the same shape and type as the first element
+            y_noised = torch.randn_like(first_element,device=self.device)
+        
+        elif isinstance(inputs, torch.Tensor):
+            # Generate a random tensor with the same shape and type as the input tensor
+            y_noised = torch.randn_like(inputs, device=self.device)
+        
+   
+        #y_noised = torch.randn((16, 12, 4, 1, 32, 32), device=self.device)
+
+        # shape noised torch.Size([192, 4, 32, 32])
+        # inputs shape 1 torch.Size([16, 12, 6, 1, 32, 32])
+        print("shape noised", y_noised.shape)
+        #print("inputs shape 1", inputs[1].shape)
+
+        for k_scalar in self.scheduler.timesteps:
+            batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
+            time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
+            
+            x_in = torch.cat([inputs[1], y_noised], axis=2) # so we only noise the second time step in this forecast
+            x_in = [inputs[0], x_in]
+
+            pred = self.model(x_in, time=  time_tensor * self.time_multiplier) # pred dimensions? NEED torch.Size([16, 12, 4, 1, 32, 32])
+            print("pred dimensions? NEED", pred.shape)
+
+            y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
+
+        y = y_noised
+
+        return y 
+           
+
+    def _eval_capture(self, capture_stream, num_warmup_steps=20):
+        self.model.eval()
+        capture_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(capture_stream):
+
+            with torch.no_grad():
+                for _ in range(num_warmup_steps):
+                
+                    # FW
+                    with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+                        # input from a single time step -> is the static input
+                        self.static_gen_eval = self.predict_next_solution()
+
+                        self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
+                        
+                        self.static_losses_eval = []
+                        for v_idx in range(len(self.output_variables)):
+                            self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
+                                                                          self.static_tar[:, :, :, v_idx]))
+                            
+            # sync here
+            capture_stream.synchronize()
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            # create graph
+            self.eval_graph = torch.cuda.CUDAGraph()
+
+            # start capture:
+            with torch.cuda.graph(self.eval_graph, pool=self.train_graph.pool()):
+
+                # FW
+                with torch.no_grad():
+                    with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+                        
+                        self.static_gen_eval = self.predict_next_solution()
+
+                        self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
+                        
+                        self.static_losses_eval = []
+                        for v_idx in range(len(self.output_variables)):
+                            # store the loss per output variable.. 
+                            self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
+                                                                          self.static_tar[:, :, :, v_idx]))
+                            
+        # wait for capture to finish
+        torch.cuda.current_stream().wait_stream(capture_stream) 
+
+    def compute_loss(self, prediction, target):
+        d = ((target-prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
+        return torch.mean(d)
+
+    def fit(
+            self,
+            epoch: int = 0,
+            validation_error: torch.Tensor = torch.inf,
+            iteration: int = 0,
+            epochs_since_improved: int = 0
+            ):
+
+        # Perform training by iterating over all epochs
+        best_validation_error = validation_error
+        for epoch in range(epoch, self.max_epochs):
+            torch.cuda.nvtx.range_push(f"training (refiner) epoch{epoch}")
+            
+            if self.sampler_train is not None:
+                self.sampler_train.set_epoch(epoch)
+
+            # Train: iterate over all training samples
+            training_step = 0
+            self.model.train()
+            
+            for inputs, target in (pbar := tqdm(self.dataloader_train, disable=(not self.print_to_screen))):
+                print("what is the input shape then?") # two tensors are the input
+               
+                for inp in inputs:
+                    print("C:")
+                    print(inp.shape)
+                # output = self.model(inputs) - old version!!!
+
+                inp_shapes = [x.shape for x in inputs]
+                self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
+                self.static_tar = torch.zeros(target.shape, dtype=torch.float32, device=self.device)
+
+
+                #for inputs, target in self.dataloader_train:
+                pbar.set_description(f"Training  epoch {epoch+1}/{self.max_epochs}")
+
+                if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                    self.writer.add_scalar(tag="epoch", scalar_value=epoch, global_step=iteration)
+
+                torch.cuda.nvtx.range_push(f"training step {training_step}") 
+                
+                inputs = [x.to(device=self.device) for x in inputs]
+                
+                target = target.to(device=self.device)
+                
+                # do optimizer step
+                if self.train_graph is not None:
+                    # copy data into entry nodes
+                    for idx, inp in enumerate(inputs):
+                        self.static_inp[idx].copy_(inp)
+                    self.static_tar.copy_(target)
+
+                    # replay
+                    self.train_graph.replay()
+
+                    # extract loss - these are defined in the train graph
+                    output = self.static_gen_train
+                    train_loss = self.static_loss_train
+                else:
+                    # THIS IS WHAT WE DO, SINCE NO DISTRIBUTED TRAINING IS USED
+                    print("NO TRAINING GRAPH??")
+                    # zero grads
+                    self.model.zero_grad(set_to_none=True)
+
+                    if self.amp_enable:
+                        with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
+                            print("Manual training!!?")
+                            if isinstance(inputs, list):
+                                print("Concat the inputs, but how?")
+                                for inp in inputs:
+                                    print("shape tensor")
+                                    print(inp.shape)
+                                    
+                                print("target shape?", target.shape)
+                                    # shape tensor
+                                    # torch.Size([16, 12, 2, 1, 32, 32])
+                                    # shape tensor
+                                    # torch.Size([16, 12, 6, 1, 32, 32])
+
+                            k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
+                            k_scalar = k.item()
+                            batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
+                            time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
+                            # model takes two time steps -> to predict next two time steps?
+                            # inputts dimension -> ([16, 12, 2, 1, 32, 32]) torch.Size([16, 12, 6, 1, 32, 32])
+
+                            noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+                            noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
+                            signal_factor = 1 - noise_factor
+                            print("dimension STATIC TAR", self.static_tar.shape) # dimension STATIC TAR torch.Size([16, 12, 4, 1, 32, 32])
+                            noise = torch.randn_like(self.static_tar)
+                            y_noised = self.scheduler.add_noise(target, noise, k)
+                            print("y_noised", y_noised.shape)
+
+                            x_in = torch.cat([inputs[1], y_noised], axis=2)
+                            x_in = [inputs[0], x_in]
+                
+                            output = self.model(x_in, time= time_tensor * self.time_multiplier) # used to be x_in
+                            train_loss = self.compute_loss(prediction=output, target=target)# self.criterion(output, target
+
+                            # target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
+                            # train_loss = self.train_criterion(pred, target)
+
+                            
+
+                    else:
+                        output = self.model(inputs, 2)
+                        train_loss = self.compute_loss(prediction=output, target=target)
+                
+                    self.gscaler.scale(train_loss).backward()
+
+                # Gradient clipping                
+                self.gscaler.unscale_(self.optimizer)
+                curr_lr = self.optimizer.param_groups[-1]["lr"] if self.lr_scheduler is None else self.lr_scheduler.get_last_lr()[0]
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), curr_lr)
+                
+                # Optimizer step
+                self.gscaler.step(self.optimizer)
+                self.gscaler.update()
+                                
+                pbar.set_postfix({"Loss": train_loss.item()})
+
+                torch.cuda.nvtx.range_pop()
+
+                if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                    self.writer.add_scalar(tag="loss", scalar_value=train_loss, global_step=iteration)
+                iteration += 1
+                training_step += 1
+
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push(f"validation epoch {epoch}")  
+            
+            # Validate (without gradients)
+            if self.sampler_valid is not None:
+                self.sampler_valid.set_epoch(epoch)
+
+            self.model.eval()
+            with torch.no_grad():
+
+                validation_stats = torch.zeros((2+len(self.output_variables)), dtype=torch.float32,
+                                               device=self.device)
+                for inputs, target in (pbar := tqdm(self.dataloader_valid, disable=(not self.print_to_screen))):
+                    pbar.set_description(f"Validation epoch {epoch+1}/{self.max_epochs}")
+                    inputs = [x.to(device=self.device) for x in inputs]
+                    target = target.to(device=self.device)
+                    bsize = float(target.shape[0])
+
+                    # do eval step
+                    if self.eval_graph is not None:
+                        # copy data into entry nodes
+                        for idx, inp in enumerate(inputs):
+                            self.static_inp[idx].copy_(inp)
+                        self.static_tar.copy_(target)
+
+                        # replay graph
+                        self.eval_graph.replay()
+
+                        # increase the loss
+                        validation_stats[0] += self.static_loss_eval * bsize
+
+                        # Same for the per-variable loss
+                        for v_idx, v_name in enumerate(self.output_variables):
+                            validation_stats[1+v_idx] += self.static_losses_eval[v_idx] * bsize
+                    else:
+                        if self.amp_enable:
+                            with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
+                                #output = self.model(inputs, time_emb) #here is the error!
+                                output = self.predict_next_solution(inputs)
+                                validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
+                                for v_idx, v_name in enumerate(self.output_variables):
+                                    validation_stats[1+v_idx] += self.criterion(
+                                        output[v_idx], target[v_idx]
+                                        ) * bsize
+                        else:
+                            output = self.model(inputs)
+                            validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
+                            for v_idx, v_name in enumerate(self.output_variables):
+                                validation_stats[1+v_idx] += self.criterion(
+                                    output[v_idx], target[:, :, :, v_idx]
+                                    ) * bsize
+
+                    pbar.set_postfix({"Loss": (validation_stats[0]/validation_stats[-1]).item()})
+                   
+
+                    # increment sample counter
+                    validation_stats[-1] += bsize
+
+                if dist.is_initialized():
+                    dist.all_reduce(validation_stats)
+
+                validation_error = (validation_stats[0] / validation_stats[-1]).item()
+
+                # Record error per variable
+                validation_errors = []
+                for v_idx, v_name in enumerate(self.output_variables):
+                    validation_errors.append((validation_stats[1+v_idx]/validation_stats[-1]).item())
+
+                # Track validation improvement to later check early stopping criterion
+                if validation_error < best_validation_error:
+                    best_validation_error = validation_error
+                    epochs_since_improved = 0
+                else:
+                    epochs_since_improved += 1
+
+
+            torch.cuda.nvtx.range_pop()
+
+            # Logging and checkpoint saving
+            if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                if self.lr_scheduler is not None:
+                    self.writer.add_scalar(tag="learning_rate", scalar_value=self.optimizer.param_groups[0]['lr'],
+                                           global_step=iteration)
+                self.writer.add_scalar(tag="val_loss", scalar_value=validation_error, global_step=iteration)
+                
+                # Per-variable loss
+                for v_idx, v_name in enumerate(self.output_variables):
+                    self.writer.add_scalar(tag=f"val_loss/{v_name}", scalar_value=validation_errors[v_idx],
+                                           global_step=iteration)
+
+                # Write model checkpoint to file, using a separate thread
+                thread = threading.Thread(
+                    target=write_checkpoint,
+                    args=(self.model.module if dist.is_initialized() else self.model,
+                          self.optimizer,
+                          self.lr_scheduler, epoch+1,
+                          iteration,
+                          validation_error,
+                          epochs_since_improved,
+                          self.output_dir_tb, )
+                    )
+                thread.start()
+
+            # Update learning rate
+            if self.lr_scheduler is not None: self.lr_scheduler.step()
+
+            # Check early stopping criterium
+            if self.early_stopping_patience is not None and epochs_since_improved >= self.early_stopping_patience:
+                print(f"Hit early stopping criterium by not improving the validation error for {epochs_since_improved}"
+                       " epochs. Finishing training.")
+                break
+
+        # Wrap up
+        # if dist.get_rank() == 0:
+        #     try:
+        #         thread.join()
+        #     except UnboundLocalError:
+        #         pass
+        self.writer.flush()
+        self.writer.close()
+
+
+####### What is this?
+# def plot_input_output(inputs, outputs, epoch):
+#     """Function to plot input and output images and save them to a directory."""
+#     # Define the directory to save images
+#     save_dir = '/home/adboer/dlwp-hpx/'
+    
+#     # Ensure the directory exists
+#     os.makedirs(save_dir, exist_ok=True)
+    
+#     num_images = min(5, inputs.shape[0])  # Display up to 5 images
+#     plt.figure(figsize=(15, 5))
+    
+#     for i in range(num_images):
+#         # Plot Input
+#         plt.subplot(2, num_images, i + 1)
+#         plt.imshow(inputs[i].cpu().numpy().transpose(1, 2, 0))  # Change shape for visualization (C, H, W) -> (H, W, C)
+#         plt.title(f"Input {i+1}")
+#         plt.axis('off')
+
+#         # Plot Output
+#         plt.subplot(2, num_images, i + num_images + 1)
+#         plt.imshow(outputs[i].cpu().numpy().transpose(1, 2, 0))  # Change shape for visualization
+#         plt.title(f"Output {i+1}")
+#         plt.axis('off')
+    
+#     plt.suptitle(f'Epoch {epoch + 1}')
+    
+#     # Save the figure
+#     image_path = os.path.join(save_dir, f'epoch_{epoch + 1}.png')
+#     plt.savefig(image_path)
+#     plt.close()  # Close the figure window to free memory
+
+
+
+
+
+# """
+# from ClimaX 
+# """
+# class LinearWarmupCosineAnnealingLR(_LRScheduler):
+# 	"""Sets the learning rate of each parameter group to follow a linear warmup schedule between
+# 	warmup_start_lr and base_lr followed by a cosine annealing schedule between base_lr and
+# 	eta_min."""
+
+# 	def __init__(
+# 		self,
+# 		optimizer: Optimizer,
+# 		warmup_epochs: int,
+# 		max_epochs: int,
+# 		warmup_start_lr: float = 0.0,
+# 		eta_min: float = 0.0,
+# 		last_epoch: int = -1,
+# 	) -> None:
+# 		"""
+# 		Args:
+# 			optimizer (Optimizer): Wrapped optimizer.
+# 			warmup_epochs (int): Maximum number of iterations for linear warmup
+# 			max_epochs (int): Maximum number of iterations
+# 			warmup_start_lr (float): Learning rate to start the linear warmup. Default: 0.
+# 			eta_min (float): Minimum learning rate. Default: 0.
+# 			last_epoch (int): The index of last epoch. Default: -1.
+# 		"""
+# 		self.warmup_epochs = warmup_epochs
+# 		self.max_epochs = max_epochs
+# 		self.warmup_start_lr = warmup_start_lr
+# 		self.eta_min = eta_min
+
+# 		super().__init__(optimizer, last_epoch)
+
+# 	def get_lr(self) -> List[float]:
+# 		"""Compute learning rate using chainable form of the scheduler."""
+# 		if not self._get_lr_called_within_step:
+# 			warnings.warn(
+# 				"To get the last learning rate computed by the scheduler, " "please use `get_last_lr()`.",
+# 				UserWarning,
+# 			)
+
+# 		if self.last_epoch == self.warmup_epochs:
+# 			return self.base_lrs
+# 		if self.last_epoch == 0:
+# 			return [self.warmup_start_lr] * len(self.base_lrs)
+# 		if self.last_epoch < self.warmup_epochs:
+# 			return [
+# 				group["lr"] + (base_lr - self.warmup_start_lr) / (self.warmup_epochs - 1)
+# 				for base_lr, group in zip(self.base_lrs, self.optimizer.param_groups)
+# 			]
+# 		if (self.last_epoch - 1 - self.max_epochs) % (2 * (self.max_epochs - self.warmup_epochs)) == 0:
+# 			return [
+# 				group["lr"]
+# 				+ (base_lr - self.eta_min) * (1 - math.cos(math.pi / (self.max_epochs - self.warmup_epochs))) / 2
+# 				for base_lr, group in zip(self.base_lrs, self.optimizer.param_groups)
+# 			]
+
+# 		return [
+# 			(1 + math.cos(math.pi * (self.last_epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)))
+# 			/ (
+# 				1
+# 				+ math.cos(
+# 					math.pi * (self.last_epoch - self.warmup_epochs - 1) / (self.max_epochs - self.warmup_epochs)
+# 				)
+# 			)
+# 			* (group["lr"] - self.eta_min)
+# 			+ self.eta_min
+# 			for group in self.optimizer.param_groups
+# 		]
+
+# 	def _get_closed_form_lr(self) -> List[float]:
+# 		"""Called when epoch is passed as a param to the `step` function of the scheduler."""
+# 		if self.last_epoch < self.warmup_epochs:
+# 			return [
+# 				self.warmup_start_lr
+# 				+ self.last_epoch * (base_lr - self.warmup_start_lr) / max(1, self.warmup_epochs - 1)
+# 				for base_lr in self.base_lrs
+# 			]
+
+# 		return [
+# 			self.eta_min
+# 			+ 0.5
+# 			* (base_lr - self.eta_min)
+# 			* (1 + math.cos(math.pi * (self.last_epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)))
+# 			for base_lr in self.base_lrs
+# 		]
+
+
+
+
+class DummyTrainer():
+    """
+    A class for DLWP model training
+    """
+
+    def __init__(
+            self,
+            model: torch.nn.Module,  # Specify... (import)
+            criterion: torch.nn.Module,  # Specify... (import)
+            optimizer: torch.nn.Module,  # Specify... (import)
+            lr_scheduler: torch.nn.Module,  # Specify... (import) # use warmup steps!!
+            output_variables = str,
+            data_module: torch.nn.Module = None,  # Specify... (import)
+            num_refinement_steps: int = 3,
+            min_epochs: int = 100,
+            max_epochs: int = 500,
+            early_stopping_patience: int = None,
+            amp_mode: str = "none",
+            graph_mode: str = "none",
+            device: torch.device = torch.device("cpu"),
+            output_dir: str = "/outputs/",
+            padding_mode: str = "zeros",
+            predict_difference: bool = False,
+            difference_weight: float = 1.0,
+            min_noise_std: float = 4e-7,
+            ema_decay: float = 0.995,
+            writing: bool = True
+            ):
+        """
+        Constructor.
+
+        :param model: 
+
+        :param criterion: A PyTorch loss module
+        :param optimizer: A PyTorch optimizer module
+        :param lr_scheduler: A PyTorch learning rate scheduler module
+        """
+        self.device = device
+        self.amp_enable = False if (amp_mode == "none") else True
+        self.amp_dtype = torch.float16 if (amp_mode == "fp16") else torch.bfloat16
+        self.output_variables = output_variables
+        self.early_stopping_patience = early_stopping_patience
+
+        self.model = model.to(device=self.device)
+        self.train_criterion = CustomMSELoss()
+
+        #self.ema = ExponentialMovingAverage(self.model, decay=self.hparams.ema_decay)
+        # We use the Diffusion implementation here. Alternatively, one could
+        # implement the denoising manually.
+        betas = [min_noise_std ** (k / num_refinement_steps) for k in reversed(range(num_refinement_steps + 1))]
+        self.scheduler = DDPMScheduler(
+            num_train_timesteps=num_refinement_steps + 1,
+            trained_betas=betas,
+            prediction_type="v_prediction", # shouldnt this be epsilon?
+            clip_sample=False,
+        )
+        print("nultiplier?")
+        # Multiplies k before passing to frequency embedding.
+        self.time_multiplier = 1000 / num_refinement_steps
+        #self.rollout_criterions = {"mse": torch.nn.MSELoss(reduction="none"), "corr": PearsonCorrelationScore()}
+        # lr_scheduler = LinearWarmupCosineAnnealingLR(
+        #     optimizer,
+        #     self.hparams.warmup_epochs,
+        #     self.hparams.max_epochs,
+        #     self.hparams.warmup_start_lr,
+        #     self.hparams.eta_min,
+        # )
+
+
+        # if dist.is_initialized():
+        #     self.dataloader_train, self.sampler_train = data_module.train_dataloader(num_shards=dist.get_world_size(),
+        #                                                                              shard_id=dist.get_rank())
+        #     self.dataloader_valid, self.sampler_valid = data_module.val_dataloader(num_shards=dist.get_world_size(),
+        #                                                                            shard_id=dist.get_rank())
+        # else:
+        #     self.dataloader_train, self.sampler_train = data_module.train_dataloader()
+        #     self.dataloader_valid, self.sampler_valid = data_module.val_dataloader()
+        # self.output_dir_tb = os.path.join(output_dir, "tensorboard")
+
+        # set the other parameters
+        self.optimizer = optimizer
+        self.criterion = criterion.to(device=self.device)
+        self.lr_scheduler = lr_scheduler
+        self.min_epochs = min_epochs
+        self.max_epochs = max_epochs
+
+        # add gradient scaler
+        self.gscaler = amp.GradScaler(enabled=(self.amp_enable and self.amp_dtype == torch.float16))
+
+        # use distributed data parallel if requested:
+        self.print_to_screen = True
+        self.train_graph = None
+        self.eval_graph = None
+
+    def _train_capture(self, inp_shapes, tar_shape, num_warmup_steps=20):
+
+        print("FORMAT OF THE SHAPES", inp_shapes)
+       
+        self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
+        self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
+        
+        self.model.train()
+        
+        k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
+
+        # ignore the warmup steps
+        self.model.zero_grad(set_to_none=True)
+
+        noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+        noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)])
+
+        signal_factor = 1 - noise_factor
+
+        noise = torch.randn_like(self.static_tar)
+        
+        y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
+        print(y_noised.shape)
+        print("STATIC", inp_shapes) 
+        
+        x_in = torch.cat([*self.static_inp, y_noised], dim=1)
+
+        print("stacking worked CHECK")
+        pred = self.model(x_in, time=k * self.time_multiplier)
+        print("Prediction with time!")
+            
+        target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
+
+        self.static_loss_train = self.train_criterion(pred, target)
+        
+        self.static_loss_train.backward()
+
+        self.optimizer.step()
+
+   
+                    
+    
+    def predict_next_solution(self):
+        # The 1 should be some time future parameter, i think the number of future time steps to predict
+        y_noised = torch.randn(
+            size=(self.static_inp.shape[0], 1, *self.static_inp.shape[2:]), dtype=self.static_inp[0].dtype, device=self.device
+        )
+        for k in self.scheduler.timesteps:
+           # time = torch.zeros(size=(self.static_inp.shape[0],), dtype=self.static_inp.dtype, device=self.device) + k
+            x_in = torch.cat([self.static_inp, y_noised], axis=1)
+            pred = self.model.forward(x_in, y_noised) # model takes an in put and a k?
+            # Predict the sample from the previous timestep by reversing the SDE. This function propagates the diffusion
+            # process from the learned model outputs (most often the predicted noise).
+            y_noised = self.scheduler.step(pred, k, y_noised).prev_sample  # output with added noise?
+            # increasingly add noise and move to the final solution
+        y = y_noised
+        # NOT predicting the difference!!!
+        return y
+    
+    def _eval_capture(self, num_warmup_steps=20):
+        self.model.eval()
+
+        with torch.no_grad():
+            for _ in range(num_warmup_steps):
+                # Forward pass
+                self.static_gen_eval = self.predict_next_solution()
+                self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
+                
+                self.static_losses_eval = []
+                for v_idx in range(len(self.output_variables)):
+                    self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
+                                                                self.static_tar[:, :, :, v_idx]))
+
+        # Final evaluation step
+        with torch.no_grad():
+            self.static_gen_eval = self.predict_next_solution()
+            self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
+            
+            self.static_losses_eval = []
+            for v_idx in range(len(self.output_variables)):
+                self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
+                                                            self.static_tar[:, :, :, v_idx]))
+
+    
+    def compute_loss(self, prediction, target):
+        d = ((target-prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
+        return torch.mean(d)
+
+    def fit(
+            self,
+            epoch: int = 0,
+            validation_error: torch.Tensor = torch.inf,
+            iteration: int = 0,
+            epochs_since_improved: int = 0
+            ):
+
+        # Perform training by iterating over all epochs
+        best_validation_error = validation_error
+        for epoch in range(epoch, self.max_epochs):
+            print('training refiner')
+           # torch.cuda.nvtx.range_push(f"training (refiner) epoch{epoch}")
+            
+            # Track epoch and learning rate in tensorboard
+            #writer.add_scalar(tag="Epoch", scalar_value=epoch, global_step=iteration)
+            #writer.add_scalar(tag="Learning Rate", scalar_value=optimizer.state_dict()["param_groups"][0]["lr"],
+            #                  global_step=iteration)
+            
+           # if self.sampler_train is not None:
+           #     self.sampler_train.set_epoch(epoch)
+
+            # Train: iterate over all training samples
+            training_step = 0
+            self.model.train()
+            #for inputs, target in tqdm(self.dataloader_train, disable=(not self.print_to_screen)):
+            for inputs, target in (pbar := tqdm(self.dataloader_train, disable=(not self.print_to_screen))):
+                #for inputs, target in self.dataloader_train:
+                pbar.set_description(f"Training  epoch {epoch+1}/{self.max_epochs}")
+
+                if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                    self.writer.add_scalar(tag="epoch", scalar_value=epoch, global_step=iteration)
+
+              #  torch.cuda.nvtx.range_push(f"training step {training_step}") 
+                
+                inputs = [x.to(device=self.device) for x in inputs] 
+                target = target.to(device=self.device)
+                
+                # do optimizer step
+                if self.train_graph is not None:
+                    # copy data into entry nodes
+                    for idx, inp in enumerate(inputs):
+                        self.static_inp[idx].copy_(inp)
+                    self.static_tar.copy_(target)
+
+                    # replay
+                    self.train_graph.replay()
+
+                    # extract loss
+                    output = self.static_gen_train
+                    train_loss = self.static_loss_train
+                else:
+                    # zero grads
+                    self.model.zero_grad(set_to_none=True)
+
+                    if self.amp_enable:
+                        with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
+                            output = self.model(inputs)
+                            train_loss = self.compute_loss(prediction=output, target=target)# self.criterion(output, target)
+                    else:
+                        output = self.model(inputs)
+                        train_loss = self.compute_loss(prediction=output, target=target)
+                
+                    self.gscaler.scale(train_loss).backward()
+
+                # Gradient clipping                
+                self.gscaler.unscale_(self.optimizer)
+                curr_lr = self.optimizer.param_groups[-1]["lr"] if self.lr_scheduler is None else self.lr_scheduler.get_last_lr()[0]
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), curr_lr)
+                
+                # Optimizer step
+                self.gscaler.step(self.optimizer)
+                self.gscaler.update()
+                                
+                pbar.set_postfix({"Loss": train_loss.item()})
+
+                torch.cuda.nvtx.range_pop()
+
+                if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                    self.writer.add_scalar(tag="loss", scalar_value=train_loss, global_step=iteration)
+                iteration += 1
+                training_step += 1
+
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push(f"validation epoch {epoch}")  
+            
+            # Validate (without gradients)
+            if self.sampler_valid is not None:
+                self.sampler_valid.set_epoch(epoch)
+
+            # self.model.eval()
+            # with torch.no_grad():
+
+            #     validation_stats = torch.zeros((2+len(self.output_variables)), dtype=torch.float32,
+            #                                    device=self.device)
+            #     for inputs, target in (pbar := tqdm(self.dataloader_valid, disable=(not self.print_to_screen))):
+            #         pbar.set_description(f"Validation epoch {epoch+1}/{self.max_epochs}")
+            #         inputs = [x.to(device=self.device) for x in inputs]
+            #         target = target.to(device=self.device)
+            #         bsize = float(target.shape[0])
+
+            #         # do eval step
+            #         if self.eval_graph is not None:
+            #             # copy data into entry nodes
+            #             for idx, inp in enumerate(inputs):
+            #                 self.static_inp[idx].copy_(inp)
+            #             self.static_tar.copy_(target)
+
+            #             # replay graph
+            #             self.eval_graph.replay()
+
+            #             # increase the loss
+            #             validation_stats[0] += self.static_loss_eval * bsize
+
+            #             # Same for the per-variable loss
+            #             for v_idx, v_name in enumerate(self.output_variables):
+            #                 validation_stats[1+v_idx] += self.static_losses_eval[v_idx] * bsize
+            #         else:
+            #             if self.amp_enable:
+            #                 with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
+            #                     output = self.model(inputs)
+            #                     validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
+            #                     for v_idx, v_name in enumerate(self.output_variables):
+            #                         validation_stats[1+v_idx] += self.criterion(
+            #                             output[v_idx], target[v_idx]
+            #                             ) * bsize
+            #             else:
+            #                 output = self.model(inputs)
+            #                 validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
+            #                 for v_idx, v_name in enumerate(self.output_variables):
+            #                     validation_stats[1+v_idx] += self.criterion(
+            #                         output[v_idx], target[:, :, :, v_idx]
+            #                         ) * bsize
+
+            #         pbar.set_postfix({"Loss": (validation_stats[0]/validation_stats[-1]).item()})
+            #         # Printing image per epoch
+            #         # for v_idx, v_name in enumerate(self.output_variables):
+                    #     print("INPUTS")
+                    #     print('inputs shape', inputs[v_idx].shape) # inputs shape torch.Size([16, 12, 4, 1, 32, 32])
+                    #     print(inputs[v_idx])
+                    #     print('output shape', output[v_idx].shape) # torch.Size([12, 4, 1, 32, 32])
+                    #     print(output[v_idx])
+
+                       # plot_input_output(inputs[v_idx], output[v_idx], epoch)
+
+                    # increment sample counter
+                #     validation_stats[-1] += bsize
+
+                # if dist.is_initialized():
+                #     dist.all_reduce(validation_stats)
+
+                # validation_error = (validation_stats[0] / validation_stats[-1]).item()
+
+                # # Record error per variable
+                # validation_errors = []
+                # for v_idx, v_name in enumerate(self.output_variables):
+                #     validation_errors.append((validation_stats[1+v_idx]/validation_stats[-1]).item())
+
+                # # Track validation improvement to later check early stopping criterion
+                # if validation_error < best_validation_error:
+                #     best_validation_error = validation_error
+                #     epochs_since_improved = 0
+                # else:
+                #     epochs_since_improved += 1
+
+
+           # torch.cuda.nvtx.range_pop()
+
+            # Logging and checkpoint saving
+            if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+                if self.lr_scheduler is not None:
+                    self.writer.add_scalar(tag="learning_rate", scalar_value=self.optimizer.param_groups[0]['lr'],
+                                           global_step=iteration)
+                self.writer.add_scalar(tag="val_loss", scalar_value=validation_error, global_step=iteration)
+                
+                # Per-variable loss
+                for v_idx, v_name in enumerate(self.output_variables):
+                    self.writer.add_scalar(tag=f"val_loss/{v_name}", scalar_value=validation_errors[v_idx],
+                                           global_step=iteration)
+
+                # Write model checkpoint to file, using a separate thread
+                thread = threading.Thread(
+                    target=write_checkpoint,
+                    args=(self.model.module if dist.is_initialized() else self.model,
+                          self.optimizer,
+                          self.lr_scheduler, epoch+1,
+                          iteration,
+                          validation_error,
+                          epochs_since_improved,
+                          self.output_dir_tb, )
+                    )
+                thread.start()
+
+            # Update learning rate
+            if self.lr_scheduler is not None: self.lr_scheduler.step()
+
+            # Check early stopping criterium
+            if self.early_stopping_patience is not None and epochs_since_improved >= self.early_stopping_patience:
+                print(f"Hit early stopping criterium by not improving the validation error for {epochs_since_improved}"
+                       " epochs. Finishing training.")
+                break
+
+        # Wrap up
+        # if dist.get_rank() == 0:
+        #     try:
+        #         thread.join()
+        #     except UnboundLocalError:
+        #         pass
+        #self.writer.flush()
+        #self.writer.close()

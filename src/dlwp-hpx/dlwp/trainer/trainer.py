@@ -103,7 +103,7 @@ class Trainer():
                     print(f"Capturing model for training ...")
                 # get the shapes
                 inp, tar = next(iter(self.dataloader_train))
-                #print(inp, tar)
+                
                 self._train_capture(capture_stream, [x.shape for x in inp], tar.shape)
 
                 if graph_mode == "train_eval":
@@ -116,80 +116,11 @@ class Trainer():
         if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
             self.writer = SummaryWriter(log_dir=self.output_dir_tb)
 
-    
-    # self.model.train()
-    # capture_stream.wait_stream(torch.cuda.current_stream())
-    # if k == 0:
-    #     with torch.cuda.stream(capture_stream):
-    #         for _ in range(num_warmup_steps):                
-    #             self.model.zero_grad(set_to_none=True)
-
-    #             # FW
-    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-    #                 #self.static_gen_train = self.model(self.static_inp)
-    #                 self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
-                    
-
-    #                 #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-    #                 self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
-
-    #             # BW
-    #             self.gscaler.scale(self.static_loss_train).backward()
-            
-    #         # sync here
-    #         capture_stream.synchronize()
-
-    #         gc.collect()
-    #         torch.cuda.empty_cache()
-
-    #         # create graph
-    #         self.train_graph = torch.cuda.CUDAGraph()
-
-    #         # zero grads before capture:
-    #         self.model.zero_grad(set_to_none=True)
-
-    #         # start capture
-    #         with torch.cuda.graph(self.train_graph):
-
-    #             # FW
-    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-    #                 #self.static_gen_train = self.model(self.static_inp)
-    #                 self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
-
-
-    #                 #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-    #                 self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
-
-    #             # BW
-    #             self.gscaler.scale(self.static_loss_train).backward()
-
-    #     # wait for capture to finish
-    #     torch.cuda.current_stream().wait_stream(capture_stream)
-    # else:
-    #     pass
-    #     # TO DO
-            
-
-    #HOW TO INCORPORATE THE PDE-REFINER IN THE TRAINING PROCESS?
-    # def train_step(self, u_t, u_prev): 
-    #     k = randint(0, self.num_steps + 1) if k == 0: 
-    #     pred = model(zeros_like(u_t), u_prev, k) 
-    #     target = u_t else: noise_std = self.min_noise_std ** (k / self.num_steps) 
-    #     noise = randn_like(u_t) 
-    #     u_t_noised = u_t + noise * noise_std 
-    #     pred = model(u_t_noised, u_prev, k) 
-    #     target = noise loss = mse(pred, target) 
-    #     return loss
-    
-    # def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
-    # # perform graph capture of the model
-    # self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
-    # self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
-    # k = random.randint(0, self.num_refinement_steps)
-
-
     def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
         # perform graph capture of the model
+        print("FORMAT OF THE SHAPES - actual training", inp_shapes)
+        print("Target shape", tar_shape)
+        
         self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
         self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
        
@@ -494,10 +425,10 @@ class Trainer():
                 break
 
         # Wrap up
-        if dist.get_rank() == 0:
-            try:
-                thread.join()
-            except UnboundLocalError:
-                pass
+        #if dist.get_rank() == 0:
+        #    try:
+        #        thread.join()
+        #    except UnboundLocalError:
+        #        pass
             self.writer.flush()
             self.writer.close()
