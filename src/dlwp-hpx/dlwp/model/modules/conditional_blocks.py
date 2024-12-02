@@ -172,8 +172,8 @@ class ConditionalResidualBlock(ConditionedBlock):
         kernel_size: int = 3,
         dilation: int = 1,
         upscale_factor: int = 4,
-        cond_channels_main: int = 0, #4,
-        time_embed_dim: int = 1024, #4,
+        cond_channels_main: int = 0,
+        time_embed_dim: int = 1024, 
         activation: th.nn.Module = th.nn.GELU(),
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
@@ -232,7 +232,7 @@ class ConditionalResidualBlock(ConditionedBlock):
             self.norm2 = th.nn.Identity()
 
         self.cond_emb = th.nn.Linear(time_embed_dim, 2 * out_channels if use_scale_shift_norm else out_channels)
-        #  (196608x1 and 4x256)
+      
 
     def forward(self, x: th.Tensor, emb: th.Tensor, cond: th.Tensor = None):
         """
@@ -251,19 +251,11 @@ class ConditionalResidualBlock(ConditionedBlock):
         else:
             h = self.conv1(self.activation(self.norm1(x)))
             
-         
         emb_out = self.cond_emb(emb)
-        print("before squeeze", emb.shape)
         emb_out =  emb_out.unsqueeze(-1).unsqueeze(-1)
-        print("EMB OUT", emb_out.shape)
-        print("H", h.shape)
-       # EMB OUT torch.Size([192, 1024, 1, 256])
-       # H torch.Size([192, 256, 32, 32])
-      
+
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
-
-        print("H", h.shape)
 
         if self.use_scale_shift_norm:
             # Step 4 - 5
