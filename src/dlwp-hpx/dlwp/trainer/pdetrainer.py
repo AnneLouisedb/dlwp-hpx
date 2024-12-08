@@ -30,48 +30,8 @@ from dlwp.utils import write_checkpoint
 # diffusion 
 from diffusers.schedulers import DDPMScheduler
 import torch.nn.functional as F
+from dlwp.utils import plot_single_step_frequency_spectrum
 
-# PDEARENA - rollout function
-# def cond_rollout2d(
-#     model: torch.nn.Module,
-#     initial_u: torch.Tensor,
-#     initial_v: torch.Tensor,
-#     delta_t: Optional[torch.Tensor],
-#     cond: Optional[torch.Tensor],
-#     grid: Optional[torch.Tensor],
-#     pde: PDEDataConfig,
-#     time_history: int,
-#     num_steps: int,
-# ):
-#     traj_ls = []
-#     pred = torch.Tensor().to(device=initial_u.device)
-#     data_vector = torch.Tensor().to(device=initial_u.device)
-
-#     for i in range(num_steps):
-#         if i == 0:
-#             if pde.n_scalar_components > 0:
-#                 data_scalar = initial_u[:, :time_history]
-            
-#             data = data_scalar
-
-#         else:
-#             data = torch.cat((data, pred), dim=1)
-#             data = data[
-#                 :,
-#                 -time_history:,
-#             ]
-
-#         if grid is not None:
-#             data = torch.cat((data, grid), dim=1)
-
-#         if delta_t is not None:
-#             pred = model(data, delta_t, cond) # model takes 
-#         else:
-#             pred = model(data, cond)
-#         traj_ls.append(pred)
-
-#     traj = torch.cat(traj_ls, dim=1)
-#     return traj
 
 # These are from the PDE ARENA
 def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
@@ -353,7 +313,7 @@ class Trainer():
         # wait for capture to finish
         torch.cuda.current_stream().wait_stream(capture_stream)
     
-    def predict_next_solution(self, inputs):
+    def predict_next_solution(self, inputs, save = None):
         """ This should be called once the model is trained! Call in the evaluation!"""
         if isinstance(inputs, list):
             # Get the first element of the list
@@ -368,39 +328,34 @@ class Trainer():
         for k_scalar in self.scheduler.timesteps:
             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
-            
-            x_in = torch.cat([inputs[1], y_noised], axis=2) # so we only noise the second time step in this forecast
+            x_in = inputs[1] + y_noised
+            # x_in = torch.cat([inputs[1], y_noised], axis=2) # so we only noise the second time step in this forecast
             x_in = [inputs[0], x_in]
 
-            pred = self.model(x_in, time=  time_tensor * self.time_multiplier) # pred dimensions? NEED torch.Size([16, 12, 4, 1, 32, 32])
-            
-            storing.append(pred)
+            pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
             
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
 
-        y = y_noised
+            if save:
+                storing.append(y_noised)
 
-        remapper = HEALPixRemap(
-        latitudes=181,
-        longitudes=360,
-        nside=32
-        )
+        y = y_noised # apparently this has dimension: output shape torch.Size([16, 12, 2, 1, 32, 32])
+        # i was expecting output shape torch.Size([16, 12, 1, 1, 32, 32])
 
-        for idx, image in enumerate(storing):
-            
-            
-            # Step 2: Extract the first item
-            first_item = image[0]  # Shape: [12, 1, 1, 32, 32]
+        if save:
 
-            # Step 3: Squeeze unnecessary dimensions (if needed)
-            first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
+            remapper = HEALPixRemap(
+            latitudes=181,
+            longitudes=360,
+            nside=32
+            )
 
-            remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"{idx}")
-
-            print(f"Images saved to directory.")
-                    
-
-        
+            for idx, image in enumerate(storing):
+                first_item = image[0]  # Shape: [12, 1, 1, 32, 32]
+                first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
+                remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"{idx}")
+                print(f"Images saved to directory.")
+                        
 
         return y 
            
@@ -517,32 +472,20 @@ class Trainer():
                     output = self.static_gen_train
                     train_loss = self.static_loss_train
                 else:
-                    # THIS IS WHAT WE DO, SINCE NO DISTRIBUTED TRAINING IS USED
+                    
                     # zero grads
                     self.model.zero_grad(set_to_none=True)
 
                     if self.amp_enable:
                         with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
-                            print("Manual training!!?")
-                            if isinstance(inputs, list):
-                                print("Concat the inputs, but how?")
-                                for inp in inputs:
-                                    print("shape tensor")
-                                    print(inp.shape)
-                                    
-                                print("target shape?", target.shape)
-                                    # shape tensor
-                                    # torch.Size([16, 12, 2, 1, 32, 32])
-                                    # shape tensor
-                                    # torch.Size([16, 12, 6, 1, 32, 32])
+
+                            print("Manual training!!?")  
 
                             k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
                             k_scalar = k.item()
                             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
                             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
-                            # model takes two time steps -> to predict next two time steps?
-                            # inputts dimension -> ([16, 12, 2, 1, 32, 32]) torch.Size([16, 12, 6, 1, 32, 32])
-
+                            
                             noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
                             noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
                             signal_factor = 1 - noise_factor
@@ -623,8 +566,13 @@ class Trainer():
                     else:
                         if self.amp_enable:
                             with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
-                                #output = self.model(inputs, time_emb) #here is the error!
+                                
                                 output = self.predict_next_solution(inputs)
+                                # this is the output of the autoregressive time step
+                                
+                                plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
+
+                                
                                 validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
                                 for v_idx, v_name in enumerate(self.output_variables):
                                     validation_stats[1+v_idx] += self.criterion(

@@ -116,117 +116,115 @@ class Trainer():
         if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
             self.writer = SummaryWriter(log_dir=self.output_dir_tb)
 
-    def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
-        # perform graph capture of the model
-        print("FORMAT OF THE SHAPES - actual training", inp_shapes)
-        print("Target shape", tar_shape)
+    # def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
+    #     # perform graph capture of the model
+    #     print("FORMAT OF THE SHAPES - actual training", inp_shapes)
+    #     print("Target shape", tar_shape)
         
-        self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
-        self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
+    #     self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
+    #     self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
        
-        self.model.train()
-        capture_stream.wait_stream(torch.cuda.current_stream())
+    #     self.model.train()
+    #     capture_stream.wait_stream(torch.cuda.current_stream())
 
-        self.static_k = torch.randint(0, self.num_refinement_steps + 1, (1,), device=self.device)
+    #     self.static_k = torch.randint(0, self.num_refinement_steps + 1, (1,), device=self.device)
      
-        with torch.cuda.stream(capture_stream):
-            for _ in range(num_warmup_steps):                
-                self.model.zero_grad(set_to_none=True)
+    #     with torch.cuda.stream(capture_stream):
+    #         for _ in range(num_warmup_steps):                
+    #             self.model.zero_grad(set_to_none=True)
 
-                # FW
-                with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                    #self.static_gen_train = self.model(self.static_inp)
-                    #self.static_gen_train = self.model.forward(self.static_inp)
-                    self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
+    #             # FW
+    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+    #                 #self.static_gen_train = self.model(self.static_inp)
+    #                 #self.static_gen_train = self.model.forward(self.static_inp)
+    #                 self.static_gen_train = self.model.forward(torch.zeros_like(self.static_tar), self.static_inp, k)
                     
+    #                 #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
+    #                 self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
 
-
-                    #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-                    self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
-
-                # BW
-                self.gscaler.scale(self.static_loss_train).backward()
+    #             # BW
+    #             self.gscaler.scale(self.static_loss_train).backward()
             
-            # sync here
-            capture_stream.synchronize()
+    #         # sync here
+    #         capture_stream.synchronize()
 
-            gc.collect()
-            torch.cuda.empty_cache()
+    #         gc.collect()
+    #         torch.cuda.empty_cache()
 
-            # create graph
-            self.train_graph = torch.cuda.CUDAGraph()
+    #         # create graph
+    #         self.train_graph = torch.cuda.CUDAGraph()
 
-            # zero grads before capture:
-            self.model.zero_grad(set_to_none=True)
+    #         # zero grads before capture:
+    #         self.model.zero_grad(set_to_none=True)
 
-            # start capture
-            with torch.cuda.graph(self.train_graph):
+    #         # start capture
+    #         with torch.cuda.graph(self.train_graph):
 
-                # FW
-                with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                    #self.static_gen_train = self.model(self.static_inp)
-                    self.static_gen_train = self.model.forward(self.static_inp)
+    #             # FW
+    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+    #                 #self.static_gen_train = self.model(self.static_inp)
+    #                 self.static_gen_train = self.model.forward(self.static_inp)
 
 
-                    #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
-                    self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
+    #                 #self.static_loss_train = self.criterion(self.static_gen_train, self.static_tar)
+    #                 self.static_loss_train = self.compute_loss(self.static_gen_train, self.static_tar)
 
-                # BW
-                self.gscaler.scale(self.static_loss_train).backward()
+    #             # BW
+    #             self.gscaler.scale(self.static_loss_train).backward()
 
-        # wait for capture to finish
-        torch.cuda.current_stream().wait_stream(capture_stream)
+    #     # wait for capture to finish
+    #     torch.cuda.current_stream().wait_stream(capture_stream)
     
 
-    def _eval_capture(self, capture_stream, num_warmup_steps=20):
-        self.model.eval()
-        capture_stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(capture_stream):
+    # def _eval_capture(self, capture_stream, num_warmup_steps=20):
+    #     self.model.eval()
+    #     capture_stream.wait_stream(torch.cuda.current_stream())
+    #     with torch.cuda.stream(capture_stream):
 
-            with torch.no_grad():
-                for _ in range(num_warmup_steps):
+    #         with torch.no_grad():
+    #             for _ in range(num_warmup_steps):
                 
-                    # FW
-                    with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                        #self.static_gen_eval = self.model(self.static_inp)
-                        self.static_gen_eval = self.model.forward(self.static_inp)
+    #                 # FW
+    #                 with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+    #                     #self.static_gen_eval = self.model(self.static_inp)
+    #                     self.static_gen_eval = self.model.forward(self.static_inp)
 
 
-                        self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
+    #                     self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
                         
-                        self.static_losses_eval = []
-                        for v_idx in range(len(self.output_variables)):
-                            self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
-                                                                          self.static_tar[:, :, :, v_idx]))
+    #                     self.static_losses_eval = []
+    #                     for v_idx in range(len(self.output_variables)):
+    #                         self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
+    #                                                                       self.static_tar[:, :, :, v_idx]))
                             
-            # sync here
-            capture_stream.synchronize()
+    #         # sync here
+    #         capture_stream.synchronize()
 
-            gc.collect()
-            torch.cuda.empty_cache()
+    #         gc.collect()
+    #         torch.cuda.empty_cache()
 
-            # create graph
-            self.eval_graph = torch.cuda.CUDAGraph()
+    #         # create graph
+    #         self.eval_graph = torch.cuda.CUDAGraph()
 
-            # start capture:
-            with torch.cuda.graph(self.eval_graph, pool=self.train_graph.pool()):
+    #         # start capture:
+    #         with torch.cuda.graph(self.eval_graph, pool=self.train_graph.pool()):
 
-                # FW
-                with torch.no_grad():
-                    with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                        #self.static_gen_eval = self.model(self.static_inp)
-                        self.static_gen_eval = self.model.forward(self.static_inp)
+    #             # FW
+    #             with torch.no_grad():
+    #                 with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+    #                     #self.static_gen_eval = self.model(self.static_inp)
+    #                     self.static_gen_eval = self.model.forward(self.static_inp)
 
 
-                        self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
+    #                     self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
                         
-                        self.static_losses_eval = []
-                        for v_idx in range(len(self.output_variables)):
-                            self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
-                                                                          self.static_tar[:, :, :, v_idx]))
+    #                     self.static_losses_eval = []
+    #                     for v_idx in range(len(self.output_variables)):
+    #                         self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
+    #                                                                       self.static_tar[:, :, :, v_idx]))
                             
-        # wait for capture to finish
-        torch.cuda.current_stream().wait_stream(capture_stream) 
+    #     # wait for capture to finish
+    #     torch.cuda.current_stream().wait_stream(capture_stream) 
 
     def compute_loss(self, prediction, target):
         d = ((target-prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights

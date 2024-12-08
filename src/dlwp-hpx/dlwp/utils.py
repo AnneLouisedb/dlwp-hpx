@@ -2,12 +2,123 @@ import logging
 import re
 import os
 import glob
-
+import xarray as xr
 import numpy as np
 import torch as th
 import pandas as pd
+import seaborn as sns
 
 logger = logging.getLogger(__name__)
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+from remap.healpix import HEALPixRemap
+
+def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sample_index=0, filename=None):
+    """
+    Plot the Fourier spectrum comparison between output and target for a single step.
+    
+    Args:
+    output (torch.Tensor): Predicted output tensor of shape (batch_size, spatial_points)
+    target (torch.Tensor): Target tensor of shape (batch_size, spatial_points)
+    spatial_domain_size (float): Size of the spatial domain
+    sample_index (int): Index of the sample to plot (default: 0)
+    filename (str): Custom filename for saving the plot (default: None, generates a timestamped filename)
+    
+    Returns:
+    matplotlib.figure.Figure: The generated figure object
+    """
+    # Check input shapes
+    assert output.shape == target.shape, "Output and target shapes must match"
+    # output is from the predict next solution step.
+
+    remapper = HEALPixRemap(
+        latitudes=181,
+        longitudes=360,
+        nside=32)
+
+    first_item = output  # Shape: [12, 1, 1, 32, 32]
+    first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
+    output = remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"output_diffusion_step")
+
+    first_item = target  # Shape: [12, 1, 1, 32, 32]
+    first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
+    target = remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"output_target_step")
+    
+    print("REMAPPER OUTPUT")
+    print(output.shape, "OUTPUT SHAPE!")
+    print(target.shape, "Target shape!")
+    #   :return: An array of shape [height=latitude, width=longitude] containing the latlon data
+    
+    # take the 23rd item in the latitude (first dimension)
+    # such that we have the array over the longitude
+    # Move tensors to CPU and convert to numpy arrays
+
+    # Assuming output and target are 3D tensors after squeezing
+    output_lat = output[23, :]  # Extracting 23rd latitude
+    target_lat = target[23, :]  # Extracting 23rd latitude
+
+    output_np = output_lat.cpu().numpy()
+    target_np = target_lat.cpu().numpy()
+
+    # Compute FFT
+    output_fft = np.fft.fft(output_np)
+    target_fft = np.fft.fft(target_np)
+
+    # Compute amplitude spectrum
+    amplitude_spectrum_output =  np.abs(output_fft)
+    amplitude_spectrum_target = np.abs(target_fft)
+
+    # set the dimensions to the x and y axis length of the original input
+    # these have to be the latitude and longitude values of the xarray
+    fft_da = xr.DataArray(amplitude_spectrum_output, dims = ['latitude', 'longitude'] )
+    fft_target = xr.DataArray(amplitude_spectrum_target, dims = ['latitude', 'longitude'])
+
+
+    fig, ax = plt.subplots(figsize=(20, 10))
+    # Prepare data for boxplot
+    data = []
+    for lat in fft_da.latitude.values:
+        for wn in range(1, 15):  # Adjust range as needed
+            amplitudes = fft_da.sel(latitude=lat).isel(longitude=wn).values
+            data.extend([(lat, wn, amp) for amp in amplitudes])
+
+    # Create DataFrame
+    df_output = pd.DataFrame(data, columns=['Latitude', 'Wavenumber', 'Amplitude'])
+
+    data_target = []
+    for lat in fft_target.latitude.values:
+        for wn in range(1, 15):
+            amplitudes = fft_target.sel(latitude=lat).isel(longitude=wn).values
+            data_target.extend([(lat, wn, amp) for amp in amplitudes])
+
+    df_target = pd.DataFrame(data_target, columns=['Latitude', 'Wavenumber', 'Amplitude'])
+
+    # Create combined boxplot
+    sns.boxplot(x='Wavenumber', y='Amplitude', hue='Latitude', data=pd.concat([df_output, df_target]), ax=ax)
+
+    # Customize the plot
+    ax.set_xlabel('Wavenumber')
+    ax.set_ylabel('Amplitude')
+    ax.set_title(f'Zonal FFT Amplitude Spectrum Distribution')
+    ax.legend(title='Latitude')
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.set_ylim(0, 80000)
+
+
+    # Generate filename if not provided
+    if filename is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f'fourier_spectrum_output_comparison_{timestamp}.png'
+
+    # Save the plot
+    plt.savefig(filename)
+    plt.close(fig)
+
+    return 
+
 
 
 def configure_logging(verbose=1):

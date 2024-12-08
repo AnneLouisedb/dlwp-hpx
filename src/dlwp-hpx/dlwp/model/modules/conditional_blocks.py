@@ -283,6 +283,7 @@ class BasicConvBlock(ConditionedBlock):
             kernel_size: int = 3,
             dilation: int = 1,
             n_layers: int = 1,
+            time_embed_dim: int = 4,
             latent_channels: int = None,
             activation: th.nn.Module = None,
             enable_nhwc: bool = False,
@@ -305,10 +306,8 @@ class BasicConvBlock(ConditionedBlock):
             # Attention
             if activation is not None: convblock.append(activation)
         self.out_channels = out_channels
-        self.convblock = th.nn.Sequential(*convblock)
-         # in channels should be the number of conditional channels
-        time_channels = 4 # this should be the initial feature map * 4
-        self.cond_emb = th.nn.Linear(time_channels, out_channels)
+        self.convblock = th.nn.Sequential(*convblock) 
+        self.cond_emb = th.nn.Linear(time_embed_dim , out_channels)
         self.time_act = Swish()
 
     def forward(self, x, time_emb):
