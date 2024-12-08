@@ -60,11 +60,11 @@ def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sam
     # Move tensors to CPU and convert to numpy arrays
 
     # Assuming output and target are 3D tensors after squeezing
-    output_lat = output[23, :]  # Extracting 23rd latitude
+    output_lat = output[23, :]  # Extracting 23rd latitudex
     target_lat = target[23, :]  # Extracting 23rd latitude
 
-    output_np = output_lat.cpu().numpy()
-    target_np = target_lat.cpu().numpy()
+    output_np = output_lat 
+    target_np = target_lat 
 
     # Compute FFT
     output_fft = np.fft.fft(output_np)
