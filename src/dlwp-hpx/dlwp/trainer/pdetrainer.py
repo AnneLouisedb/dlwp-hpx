@@ -229,112 +229,116 @@ class Trainer():
         return loss_vecs
 
 
-    def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
-        """This is a single training step in the cuda stream"""
-        # perform graph capture of the model
+    # def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
+    #     """This is a single training step in the cuda stream"""
+    #     # perform graph capture of the model
 
-        self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
-        self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
-        # Multiplies k before passing to frequency embedding.
+    #     self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
+    #     self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
+    #     # Multiplies k before passing to frequency embedding.
         
-        self.model.train()
-        capture_stream.wait_stream(torch.cuda.current_stream())
-        # define the number of refinementss
+    #     self.model.train()
+    #     capture_stream.wait_stream(torch.cuda.current_stream())
+    #     # define the number of refinementss
         
-        # this is the original k + 1 (number of training steps)
-        k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
+    #     # this is the original k + 1 (number of training steps)
+    #     k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
 
-        with torch.cuda.stream(capture_stream):
-            for _ in range(num_warmup_steps):                
-                self.model.zero_grad(set_to_none=True)
+    #     with torch.cuda.stream(capture_stream):
+    #         for _ in range(num_warmup_steps):                
+    #             self.model.zero_grad(set_to_none=True)
 
-                # FW
-                with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+    #             # FW
+    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
 
-                    noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
-                    noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
+    #                 noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+    #                 noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
 
-                    signal_factor = 1 - noise_factor
+    #                 signal_factor = 1 - noise_factor
 
-                    noise = torch.randn_like(self.static_tar)
+    #                 noise = torch.randn_like(self.static_tar)
                     
-                    y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
+    #                 y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
 
-                    x_in = torch.cat([self.static_inp, y_noised], axis=1)
+    #                 x_in = torch.cat([self.static_inp, y_noised], axis=1)
 
-                    pred = self.model(x_in, time=k * self.time_multiplier)
+    #                 pred = self.model(x_in, time=k * self.time_multiplier)
                      
-                    target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
+    #                 target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
 
-                    self.static_loss_train= self.train_criterion(pred, target)
+    #                 self.static_loss_train= self.train_criterion(pred, target)
                     
                     
-                # Backward
-                self.gscaler.scale(self.static_loss_train).backward()
+    #             # Backward
+    #             self.gscaler.scale(self.static_loss_train).backward()
             
-            # sync here
-            capture_stream.synchronize()
+    #         # sync here
+    #         capture_stream.synchronize()
 
-            gc.collect()
-            torch.cuda.empty_cache()
+    #         gc.collect()
+    #         torch.cuda.empty_cache()
 
-            # create graph
-            self.train_graph = torch.cuda.CUDAGraph()
+    #         # create graph
+    #         self.train_graph = torch.cuda.CUDAGraph()
 
-            # zero grads before capture:
-            self.model.zero_grad(set_to_none=True)
+    #         # zero grads before capture:
+    #         self.model.zero_grad(set_to_none=True)
 
-            # start capture
-            with torch.cuda.graph(self.train_graph):
+    #         # start capture
+    #         with torch.cuda.graph(self.train_graph):
 
-                # FW
-                with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
+    #             # FW
+    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
                     
-                    noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
-                    noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
+    #                 noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+    #                 noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
 
-                    signal_factor = 1 - noise_factor
+    #                 signal_factor = 1 - noise_factor
 
-                    noise = torch.randn_like(self.static_tar)
+    #                 noise = torch.randn_like(self.static_tar)
                     
-                    y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
+    #                 y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
 
-                    x_in = torch.cat([self.static_inp, y_noised], axis=1)
+    #                 x_in = torch.cat([self.static_inp, y_noised], axis=1)
 
-                    pred = self.model(x_in, time=k * self.time_multiplier)
+    #                 pred = self.model(x_in, time=k * self.time_multiplier)
                      
-                    target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
+    #                 target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
 
-                    self.static_loss_train= self.train_criterion(pred, target)
+    #                 self.static_loss_train= self.train_criterion(pred, target)
 
-                # BW
-                self.gscaler.scale(self.static_loss_train).backward()
+    #             # BW
+    #             self.gscaler.scale(self.static_loss_train).backward()
 
-        # wait for capture to finish
-        torch.cuda.current_stream().wait_stream(capture_stream)
+    #     # wait for capture to finish
+    #     torch.cuda.current_stream().wait_stream(capture_stream)
     
     def predict_next_solution(self, inputs, save = None):
         """ This should be called once the model is trained! Call in the evaluation!"""
         if isinstance(inputs, list):
             # Get the first element of the list
-            first_element = inputs[-1]
+            first_element = inputs[0]
             # Generate a random tensor with the same shape and type as the first element
             y_noised = torch.randn_like(first_element,device=self.device)
         
         elif isinstance(inputs, torch.Tensor):
             # Generate a random tensor with the same shape and type as the input tensor
             y_noised = torch.randn_like(inputs, device=self.device)
+
         storing = []
         for k_scalar in self.scheduler.timesteps:
             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
             x_in = inputs[1] + y_noised
             # x_in = torch.cat([inputs[1], y_noised], axis=2) # so we only noise the second time step in this forecast
-            x_in = [inputs[0], x_in]
+
+            x_in = [inputs[0], x_in] # conditioning input, actual input
 
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
+            print("PRD OUTPUT?", pred.shape) # torch.Size([16, 12, 1, 1, 32, 32])
             
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
+            print("Y_NOISED SHAPE", y_noised.shape)  # torch.Size([16, 12, 2, 1, 32, 32]) WHY??
 
             if save:
                 storing.append(y_noised)
@@ -489,15 +493,19 @@ class Trainer():
                             noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
                             noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
                             signal_factor = 1 - noise_factor
+
                             print("dimension STATIC TAR", self.static_tar.shape) # dimension STATIC TAR torch.Size([16, 12, 4, 1, 32, 32])
                             noise = torch.randn_like(self.static_tar)
-                            y_noised = self.scheduler.add_noise(target, noise, k)
-                            print("y_noised", y_noised.shape)
 
-                            x_in = torch.cat([inputs[1], y_noised], axis=2)
+                            y_noised = self.scheduler.add_noise(target, noise, k)
+                            print("y_noised", y_noised.shape) #  torch.Size([8, 12, 1, 1, 32, 32])
+
+                            x_in = inputs[1] + y_noised
                             x_in = [inputs[0], x_in]
                 
                             output = self.model(x_in, time= time_tensor * self.time_multiplier) # used to be x_in
+                            print("OUTPUT SHAPES,", output.shape) # OUTPUT SHAPES, torch.Size([8, 12, 1, 1, 32, 32])
+
                             train_loss = self.compute_loss(prediction=output, target=target)# self.criterion(output, target
 
                             # target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
@@ -542,6 +550,7 @@ class Trainer():
                 validation_stats = torch.zeros((2+len(self.output_variables)), dtype=torch.float32,
                                                device=self.device)
                 for inputs, target in (pbar := tqdm(self.dataloader_valid, disable=(not self.print_to_screen))):
+                    # why does the dataloader return a list of two time steps, check this out?
                     pbar.set_description(f"Validation epoch {epoch+1}/{self.max_epochs}")
                     inputs = [x.to(device=self.device) for x in inputs]
                     target = target.to(device=self.device)
@@ -569,7 +578,8 @@ class Trainer():
                                 
                                 output = self.predict_next_solution(inputs)
                                 # this is the output of the autoregressive time step
-                                
+
+                               
                                 plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
 
                                 

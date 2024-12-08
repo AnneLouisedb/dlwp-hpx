@@ -31,6 +31,9 @@ def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sam
     matplotlib.figure.Figure: The generated figure object
     """
     # Check input shapes
+    print(output.shape, "OUTPUT SHAPE!")
+    print(target.shape, "Target shape!")
+
     assert output.shape == target.shape, "Output and target shapes must match"
     # output is from the predict next solution step.
 
@@ -39,11 +42,11 @@ def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sam
         longitudes=360,
         nside=32)
 
-    first_item = output  # Shape: [12, 1, 1, 32, 32]
+    first_item = output[0]  # Shape: [12, 1, 1, 32, 32]
     first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
     output = remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"output_diffusion_step")
 
-    first_item = target  # Shape: [12, 1, 1, 32, 32]
+    first_item = target[0]  # Shape: [12, 1, 1, 32, 32]
     first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
     target = remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"output_target_step")
     
