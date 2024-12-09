@@ -473,7 +473,9 @@ class TimeSeriesDataset(Dataset):
 
         self.input_scaling = None
         self.target_scaling = None
+        self.fine_scaled_vars = {}
         self._get_scaling_da()
+        
 
         #self.inputs_result = [np.random.randn(16, 12, 2, 7, 64, 64), np.random.randn(16, 12, 6, 1, 64, 64), np.random.randn(12, 2, 64, 64)]
         #self.target = np.random.randn(16, 12, 4, 7, 64, 64)
@@ -501,6 +503,7 @@ class TimeSeriesDataset(Dataset):
                 'mean': 0. if isinstance(values['mean'], str) else values['mean'],
                 'std': 1. if isinstance(values['std'], str) else values['std']
             }
+            self.fine_scaled_vars[var] = values 
         
         scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' or 'spatial_fine'
         scaling_df.loc['zeros'] = {'mean': 0., 'std': 1.}
@@ -596,9 +599,50 @@ class TimeSeriesDataset(Dataset):
         input_array = self.ds['inputs'].isel(**batch).to_numpy()
         input_array = (input_array - self.input_scaling['mean']) / self.input_scaling['std']
       
+        
+        # Apply fine scaling for input variables
+        for i, var in enumerate(self.ds.channel_in.values):
+            if var in self.fine_scaled_vars:
+                print(f"Special spacing for {var}")
+                if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
+                    # Apply temporal-spatial fine scaling
+                    # Week : array of week numbers for the selected time steps in the batch.
+                    weeks = self.ds['time'].isel(**batch).dt.isocalendar().week.values
+                    for j, week in enumerate(weeks):
+                        mean = self.ds[var].groupby('time.week').mean().sel(week=week).values
+                        std = self.ds[var].groupby('time.week').std().sel(week=week).values
+                        input_array[j, i] = (input_array[j, i] - mean) / std
+                        
+                elif self.fine_scaled_vars[var]['mean'] == 'spatial_fine':
+                    # Apply spatial fine scaling
+                    mean = self.ds[var].mean('time').values
+                    std = self.ds[var].std('time').values
+                    input_array[:, i] = (input_array[:, i] - mean) / std
+                   
+
+
         if not self.forecast_mode:
             target_array = self.ds['targets'].isel(**batch).to_numpy()
             target_array = (target_array - self.target_scaling['mean']) / self.target_scaling['std']
+
+            # Apply fine scaling for target variables
+            for i, var in enumerate(self.ds.channel_out.values):
+                if var in self.fine_scaled_vars:
+                    print(f"Special spacing for {var}")
+                    if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
+                        # Apply temporal-spatial fine scaling
+                        weeks = self.ds['time'].isel(**batch).dt.isocalendar().week.values
+                        for j, week in enumerate(weeks):
+                            mean = self.ds[var].groupby('time.week').mean().sel(week=week).values
+                            std = self.ds[var].groupby('time.week').std().sel(week=week).values
+                            target_array[j, i] = (target_array[j, i] - mean) / std
+                    elif self.fine_scaled_vars[var]['mean'] == 'spatial_fine':
+                        # Apply spatial fine scaling
+                        mean = self.ds[var].mean('time').values
+                        std = self.ds[var].std('time').values
+                        target_array[:, i] = (target_array[:, i] - mean) / std
+
+
            
             
         logger.log(5, "loaded batch data in %0.2f s", time.time() - load_time)
