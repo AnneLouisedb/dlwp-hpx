@@ -52,7 +52,7 @@ source activate dlwp-hpx
 
 
 # conditional command
-RUN_CMD="python -u /home/adboer/dlwp-hpx/src/dlwp-hpx/scripts/train.py num_workers=8 port=29450 learning_rate=2e-4 batch_size=16 experiment_name=hpx64_unet_initial model=Cond_hpx_unet model.encoder.n_channels=[256,128,64] model.decoder.n_channels=[64,128,256] trainer.max_epochs=1 data=era5_hpx64_1var_24h_24h data.prefix=era5_1deg_1D_HPX32_1940-2024_  data.prebuilt_dataset=False data.module.drop_last=True trainer/lr_scheduler=cosine trainer/optimizer=adam"
+RUN_CMD="python -u /home/adboer/dlwp-hpx/src/dlwp-hpx/scripts/train.py num_workers=8 port=29450 learning_rate=2e-4 batch_size=8 experiment_name=hpx64_unet_initial model=Cond_hpx_unet model.encoder.n_channels=[256,128,64] model.decoder.n_channels=[64,128,256] trainer.max_epochs=10 data=era5_hpx64_1var_24h_24h data.prefix=era5_1deg_1D_HPX32_1940-2024_  data.prebuilt_dataset=False data.module.drop_last=True trainer/lr_scheduler=cosine trainer/optimizer=adam"
 
 
 # Specify number of GPUs and CPUs

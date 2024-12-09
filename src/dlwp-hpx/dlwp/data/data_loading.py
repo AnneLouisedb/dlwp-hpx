@@ -493,10 +493,19 @@ class TimeSeriesDataset(Dataset):
         return pd.Timedelta(hours=dt) if isinstance(dt, int) else pd.Timedelta(dt)
 
     def _get_scaling_da(self):
-        scaling_df = pd.DataFrame.from_dict(self.scaling).T
+        # For the values that are fine scaled, or temporal fine scaled, apply NO SCALING, such that we can scale later
+        # set hte mean and STD accordingly  (from self.scaling)
+        processed_scaling = {}
+        for var, values in self.scaling.items():
+            processed_scaling[var] = {
+                'mean': 0. if isinstance(values['mean'], str) else values['mean'],
+                'std': 1. if isinstance(values['std'], str) else values['std']
+            }
+        
+        scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' or 'spatial_fine'
         scaling_df.loc['zeros'] = {'mean': 0., 'std': 1.}
         scaling_da = scaling_df.to_xarray().astype('float32')
-
+        
         # REMARK: we remove the xarray overhead from these
         try:
             self.input_scaling = scaling_da.sel(index=self.ds.channel_in.values).rename({'index': 'channel_in'})
@@ -509,10 +518,37 @@ class TimeSeriesDataset(Dataset):
             self.target_scaling = scaling_da.sel(index=self.ds.channel_out.values).rename({'index': 'channel_out'})
             self.target_scaling = {"mean": np.expand_dims(self.target_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
                                    "std": np.expand_dims(self.target_scaling["std"].to_numpy(), (0, 2, 3, 4))}
+           
         except (ValueError, KeyError):
             raise KeyError(f"one or more of the target data variables f{list(self.ds.channel_out)} not found in the "
                            f"scaling config dict data.scaling ({list(self.scaling.keys())})")
+        
+    def _process_scaling_value(self, value, scaling_type):
+        """
+        Process scaling values for different scaling methods.
 
+        This method handles three types of scaling:
+        1. Default scaling: Uses pre-computed values.
+        2. Temporal-spatial fine scaling: Computes statistics for each week and grid cell.
+        3. Spatial fine scaling: Computes statistics for each grid cell across all time points.
+        """
+        if isinstance(value.values[0], str) and value.values[0] == 'temporal_spatial_fine':
+            """ Removing local seasonal trends, and capturing local variability. Cmputing the mean and std, for each week of the year, for each grid cell."""
+            if scaling_type == "mean":
+                return self.ds.groupby(self.ds["time"].dt.isocalendar().week).mean("time")  # mean at gridpoint i, at week w computed across all years
+            elif scaling_type == "std":
+                return  self.ds.groupby(self.ds["time"].dt.isocalendar().week).std("time") # mean standard deviation at gridpoint i, at week w computed across all years
+        
+        elif isinstance(value.values[0], str) and value.values[0] == 'spatial_fine':
+            # mean and std are computed for each gridpoint, but acrosss ALL time points. This method preserves spatial anomalies. 
+            if scaling_type == "mean":
+                return self.ds.mean("time") 
+            elif scaling_type == "std":
+                return  self.ds.std("time")
+        else:
+            pass
+       
+            
     def __len__(self):
         if self.forecast_mode:
             return len(self._forecast_init_indices)
@@ -557,16 +593,13 @@ class TimeSeriesDataset(Dataset):
         batch = {'time': slice(*time_index)}
         load_time = time.time()
 
-
         input_array = self.ds['inputs'].isel(**batch).to_numpy()
         input_array = (input_array - self.input_scaling['mean']) / self.input_scaling['std']
-        #input_array = ((self.ds['inputs'].isel(**batch) - self.input_scaling['mean']) /
-        #               self.input_scaling['std']).compute()
+      
         if not self.forecast_mode:
             target_array = self.ds['targets'].isel(**batch).to_numpy()
             target_array = (target_array - self.target_scaling['mean']) / self.target_scaling['std']
-            #target_array = ((self.ds['targets'].isel(**batch) - self.target_scaling['mean']) /
-            #                self.target_scaling['std']).compute()
+           
             
         logger.log(5, "loaded batch data in %0.2f s", time.time() - load_time)
         torch.cuda.nvtx.range_pop()
