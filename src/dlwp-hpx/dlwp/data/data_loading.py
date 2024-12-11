@@ -154,17 +154,7 @@ def open_time_series_dataset_classic_prebuilt(
         ) -> xr.Dataset:
 
     result = xr.open_zarr(os.path.join(directory, dataset_name + ".zarr"), chunks={'time': batch_size})
-    #result = xr.open_zarr(os.path.join(directory, dataset_name + ".zarr"))
     return result
-
-
-    result = xr.Dataset()
-    result['inputs'] = xr.open_dataarray(os.path.join(directory, dataset_name + "_inputs.nc"), chunks={'time': batch_size}, autoclose=True)
-    result['targets'] = xr.open_dataarray(os.path.join(directory, dataset_name + "_targets.nc"), chunks={'time': batch_size}, autoclose=True)
-    if constants:
-        result['constants'] = xr.open_dataarray(os.path.join(directory, dataset_name + "_constants.nc"), chunks={'time': batch_size}, autoclose=True)
-    return result
-
 
 def create_time_series_dataset_classic(
         src_directory: str,
