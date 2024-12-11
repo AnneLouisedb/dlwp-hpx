@@ -65,7 +65,8 @@ class CustomMSELoss(torch.nn.Module):
         self.reduction = reduction
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return custommse_loss(input, target, reduction=self.reduction)
+        MSEloss = torch.nn.MSELoss(reduction=self.reduction)
+        return MSEloss(input, target, reduction=self.reduction)
 
 
 class Trainer():
@@ -228,91 +229,6 @@ class Trainer():
         loss_vecs = {k: sum(v) / max(1, len(v)) for k, v in losses.items()}
         return loss_vecs
 
-
-    # def _train_capture(self, capture_stream, inp_shapes, tar_shape, num_warmup_steps=20):
-    #     """This is a single training step in the cuda stream"""
-    #     # perform graph capture of the model
-
-    #     self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
-    #     self.static_tar = torch.zeros(tar_shape, dtype=torch.float32, device=self.device)
-    #     # Multiplies k before passing to frequency embedding.
-        
-    #     self.model.train()
-    #     capture_stream.wait_stream(torch.cuda.current_stream())
-    #     # define the number of refinementss
-        
-    #     # this is the original k + 1 (number of training steps)
-    #     k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
-
-    #     with torch.cuda.stream(capture_stream):
-    #         for _ in range(num_warmup_steps):                
-    #             self.model.zero_grad(set_to_none=True)
-
-    #             # FW
-    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-
-    #                 noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
-    #                 noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
-
-    #                 signal_factor = 1 - noise_factor
-
-    #                 noise = torch.randn_like(self.static_tar)
-                    
-    #                 y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
-
-    #                 x_in = torch.cat([self.static_inp, y_noised], axis=1)
-
-    #                 pred = self.model(x_in, time=k * self.time_multiplier)
-                     
-    #                 target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
-
-    #                 self.static_loss_train= self.train_criterion(pred, target)
-                    
-                    
-    #             # Backward
-    #             self.gscaler.scale(self.static_loss_train).backward()
-            
-    #         # sync here
-    #         capture_stream.synchronize()
-
-    #         gc.collect()
-    #         torch.cuda.empty_cache()
-
-    #         # create graph
-    #         self.train_graph = torch.cuda.CUDAGraph()
-
-    #         # zero grads before capture:
-    #         self.model.zero_grad(set_to_none=True)
-
-    #         # start capture
-    #         with torch.cuda.graph(self.train_graph):
-
-    #             # FW
-    #             with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                    
-    #                 noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
-    #                 noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp.ndim - 1)])
-
-    #                 signal_factor = 1 - noise_factor
-
-    #                 noise = torch.randn_like(self.static_tar)
-                    
-    #                 y_noised = self.scheduler.add_noise(self.static_tar, noise, k)
-
-    #                 x_in = torch.cat([self.static_inp, y_noised], axis=1)
-
-    #                 pred = self.model(x_in, time=k * self.time_multiplier)
-                     
-    #                 target = (noise_factor**0.5) * noise - (signal_factor**0.5) * self.static_tar
-
-    #                 self.static_loss_train= self.train_criterion(pred, target)
-
-    #             # BW
-    #             self.gscaler.scale(self.static_loss_train).backward()
-
-    #     # wait for capture to finish
-    #     torch.cuda.current_stream().wait_stream(capture_stream)
-    
     def predict_next_solution(self, inputs, save = None):
         """ This should be called once the model is trained! Call in the evaluation!"""
         if isinstance(inputs, list):
@@ -578,8 +494,6 @@ class Trainer():
                                 
                                 output = self.predict_next_solution(inputs)
                                 # this is the output of the autoregressive time step
-
-                               
                                 plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
 
                                 
