@@ -31,7 +31,8 @@ from dlwp.utils import write_checkpoint
 from diffusers.schedulers import DDPMScheduler
 import torch.nn.functional as F
 from dlwp.utils import plot_single_step_frequency_spectrum
-
+import wandb
+ 
 
 # These are from the PDE ARENA
 # def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
@@ -188,7 +189,9 @@ class Trainer():
         # Initialize tensorbaord to track scalars
         if writing:
             if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
-                self.writer = SummaryWriter(log_dir=self.output_dir_tb)
+                #self.writer = SummaryWriter(log_dir=self.output_dir_tb)
+                wandb.init(project="your_project_name")
+
     
 
     # Make sure this code aligns!!         
@@ -245,21 +248,20 @@ class Trainer():
         for k_scalar in self.scheduler.timesteps:
             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
-            x_in = inputs[1] + y_noised
-            # x_in = torch.cat([inputs[1], y_noised], axis=2) # so we only noise the second time step in this forecast
+            x_in = inputs[0] + y_noised
             x_in = [inputs[0], x_in] # conditioning input, actual input
 
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
-            print("PRD OUTPUT?", pred.shape) # torch.Size([16, 12, 1, 1, 32, 32])
+            print("PRD OUTPUT?", pred.shape) 
             
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
-            print("Y_NOISED SHAPE", y_noised.shape)  # torch.Size([16, 12, 2, 1, 32, 32]) WHY??
+            print("Y_NOISED SHAPE", y_noised.shape)  
 
             if save:
                 storing.append(y_noised)
 
-        y = y_noised # apparently this has dimension: output shape torch.Size([16, 12, 2, 1, 32, 32])
-        # i was expecting output shape torch.Size([16, 12, 1, 1, 32, 32])
+        y = y_noised 
+        
 
         if save:
 
@@ -305,9 +307,9 @@ class Trainer():
             for inputs, target in (pbar := tqdm(self.dataloader_train, disable=(not self.print_to_screen))):
                 print("what is the input shape then?") # two tensors are the input
                
-                for inp in inputs:
-                    print("C:")
-                    print(inp.shape)
+                # for inp in inputs:
+                # print("Input size:")
+                #    print(inp.shape)
                 # output = self.model(inputs) - old version!!!
 
                 inp_shapes = [x.shape for x in inputs]
@@ -319,7 +321,9 @@ class Trainer():
                 pbar.set_description(f"Training  epoch {epoch+1}/{self.max_epochs}")
 
                 if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
-                    self.writer.add_scalar(tag="epoch", scalar_value=epoch, global_step=iteration)
+                    #self.writer.add_scalar(tag="epoch", scalar_value=epoch, global_step=iteration)
+                    wandb.log({"epoch": epoch}, step=iteration)
+                    
 
                 torch.cuda.nvtx.range_push(f"training step {training_step}") 
                 
@@ -349,6 +353,7 @@ class Trainer():
                         with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
 
                             print("Manual training!!?")  
+                            assert len(inputs) == 1
 
                             k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
                             k_scalar = k.item()
@@ -359,21 +364,19 @@ class Trainer():
                             noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
                             signal_factor = 1 - noise_factor
 
-                            print("dimension STATIC TAR", self.static_tar.shape) # dimension STATIC TAR torch.Size([16, 12, 4, 1, 32, 32])
                             noise = torch.randn_like(self.static_tar)
-
                             y_noised = self.scheduler.add_noise(target, noise, k)
-                            print("y_noised", y_noised.shape) #  torch.Size([8, 12, 1, 1, 32, 32])
 
-                            x_in = inputs[1] + y_noised
+                            #print("y_noised", y_noised.shape) 
+
+                            x_in = inputs[0] + y_noised
                             x_in = [inputs[0], x_in]
                 
-                            output = self.model(x_in, time= time_tensor * self.time_multiplier) # used to be x_in
-                            print("OUTPUT SHAPES,", output.shape) # OUTPUT SHAPES, torch.Size([8, 12, 1, 1, 32, 32])
+                            output = self.model(x_in, time= time_tensor * self.time_multiplier)
+                            #print("OUTPUT SHAPES,", output.shape) 
                             target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
                             train_loss = self.train_criterion(input = output, target = target)
 
-                            
 
                     else:
                         output = self.model(inputs, 2)
@@ -395,7 +398,9 @@ class Trainer():
                 torch.cuda.nvtx.range_pop()
 
                 if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
-                    self.writer.add_scalar(tag="loss", scalar_value=train_loss, global_step=iteration)
+                    #self.writer.add_scalar(tag="loss", scalar_value=train_loss, global_step=iteration)
+                    wandb.log({"loss": train_loss}, step=iteration)
+
                 iteration += 1
                 training_step += 1
 
@@ -485,14 +490,21 @@ class Trainer():
             # Logging and checkpoint saving
             if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
                 if self.lr_scheduler is not None:
-                    self.writer.add_scalar(tag="learning_rate", scalar_value=self.optimizer.param_groups[0]['lr'],
-                                           global_step=iteration)
-                self.writer.add_scalar(tag="val_loss", scalar_value=validation_error, global_step=iteration)
+                    #self.writer.add_scalar(tag="learning_rate", scalar_value=self.optimizer.param_groups[0]['lr'],
+                    #                       global_step=iteration)
+                    wandb.log({ "learning_rate": self.optimizer.param_groups[0]['lr']}, step=iteration)
+                    
+                #self.writer.add_scalar(tag="val_loss", scalar_value=validation_error, global_step=iteration)
                 
+                wandb.log({ "val_loss": validation_error}, step=iteration)
+
                 # Per-variable loss
                 for v_idx, v_name in enumerate(self.output_variables):
-                    self.writer.add_scalar(tag=f"val_loss/{v_name}", scalar_value=validation_errors[v_idx],
-                                           global_step=iteration)
+                    #self.writer.add_scalar(tag=f"val_loss/{v_name}", scalar_value=validation_errors[v_idx],
+                    #                       global_step=iteration)
+                
+                    wandb.log({f"val_loss/{v_name}": validation_errors[v_idx]}, step=iteration)
+
 
                 # Write model checkpoint to file, using a separate thread
                 thread = threading.Thread(
@@ -516,12 +528,6 @@ class Trainer():
                        " epochs. Finishing training.")
                 break
 
-        # Wrap up
-        # if dist.get_rank() == 0:
-        #     try:
-        #         thread.join()
-        #     except UnboundLocalError:
-        #         pass
-        self.writer.flush()
-        self.writer.close()
+       
+        
 

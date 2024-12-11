@@ -653,13 +653,17 @@ class TimeSeriesDataset(Dataset):
 
         inputs_result = [inputs]
         if self.add_insolation:
+            print(inputs_results.shape)
+            print("WHAT IS ADD ISOLATION")
             inputs_result.append(decoder_inputs)
+            print(inputs_results.shape)
 
         # we need to transpose channels and data:
         # [B, T, C, F, H, W] -> [B, F, T, C, H, W]
         inputs_result = [np.transpose(x, axes=(0, 3, 1, 2, 4, 5)) for x in inputs_result]
             
         if 'constants' in self.ds.data_vars:
+            print("are there constants to be added?")
             # Add the constants as [F, C, H, W]
             inputs_result.append(np.swapaxes(self.ds.constants.values, 0, 1))
             #inputs_result.append(self.ds.constants.values)
