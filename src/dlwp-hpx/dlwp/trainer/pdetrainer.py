@@ -34,21 +34,21 @@ from dlwp.utils import plot_single_step_frequency_spectrum
 
 
 # These are from the PDE ARENA
-def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
-    loss = F.mse_loss(input, target, reduction="none")
-    # avg across space
-    reduced_loss = torch.mean(loss, dim=tuple(range(3, loss.ndim)))
-    # sum across time + fields
-    reduced_loss = reduced_loss.sum(dim=(1, 2))
-    # reduce along batch
-    if reduction == "mean":
-        return torch.mean(reduced_loss)
-    elif reduction == "sum":
-        return torch.sum(reduced_loss)
-    elif reduction == "none":
-        return reduced_loss
-    else:
-        raise NotImplementedError(reduction)
+# def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
+#     loss = F.mse_loss(input, target, reduction="none")
+#     # avg across space
+#     reduced_loss = torch.mean(loss, dim=tuple(range(3, loss.ndim)))
+#     # sum across time + fields
+#     reduced_loss = reduced_loss.sum(dim=(1, 2))
+#     # reduce along batch
+#     if reduction == "mean":
+#         return torch.mean(reduced_loss)
+#     elif reduction == "sum":
+#         return torch.sum(reduced_loss)
+#     elif reduction == "none":
+#         return reduced_loss
+#     else:
+#         raise NotImplementedError(reduction)
 
 
 class CustomMSELoss(torch.nn.Module):
@@ -247,7 +247,6 @@ class Trainer():
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
             x_in = inputs[1] + y_noised
             # x_in = torch.cat([inputs[1], y_noised], axis=2) # so we only noise the second time step in this forecast
-
             x_in = [inputs[0], x_in] # conditioning input, actual input
 
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
@@ -279,56 +278,6 @@ class Trainer():
 
         return y 
            
-
-    def _eval_capture(self, capture_stream, num_warmup_steps=20):
-        self.model.eval()
-        capture_stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(capture_stream):
-
-            with torch.no_grad():
-                for _ in range(num_warmup_steps):
-                
-                    # FW
-                    with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                        # input from a single time step -> is the static input
-                        self.static_gen_eval = self.predict_next_solution()
-
-                        self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
-                        
-                        self.static_losses_eval = []
-                        for v_idx in range(len(self.output_variables)):
-                            self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
-                                                                          self.static_tar[:, :, :, v_idx]))
-                            
-            # sync here
-            capture_stream.synchronize()
-
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            # create graph
-            self.eval_graph = torch.cuda.CUDAGraph()
-
-            # start capture:
-            with torch.cuda.graph(self.eval_graph, pool=self.train_graph.pool()):
-
-                # FW
-                with torch.no_grad():
-                    with amp.autocast(enabled = self.amp_enable, dtype = self.amp_dtype):
-                        
-                        self.static_gen_eval = self.predict_next_solution()
-
-                        self.static_loss_eval = self.criterion(self.static_gen_eval, self.static_tar)
-                        
-                        self.static_losses_eval = []
-                        for v_idx in range(len(self.output_variables)):
-                            # store the loss per output variable.. 
-                            self.static_losses_eval.append(self.criterion(self.static_gen_eval[:, :, :, v_idx],
-                                                                          self.static_tar[:, :, :, v_idx]))
-                            
-        # wait for capture to finish
-        torch.cuda.current_stream().wait_stream(capture_stream) 
-
     def compute_loss(self, prediction, target):
         d = ((target-prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
         return torch.mean(d)
@@ -422,10 +371,9 @@ class Trainer():
                             output = self.model(x_in, time= time_tensor * self.time_multiplier) # used to be x_in
                             print("OUTPUT SHAPES,", output.shape) # OUTPUT SHAPES, torch.Size([8, 12, 1, 1, 32, 32])
 
-                            train_loss = self.compute_loss(prediction=output, target=target)# self.criterion(output, target
-
-                            # target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
-                            # train_loss = self.train_criterion(pred, target)
+                        
+                            target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
+                            train_loss = self.train_criterion(pred = output, target = target)
 
                             
 
@@ -494,7 +442,7 @@ class Trainer():
                                 
                                 output = self.predict_next_solution(inputs)
                                 # this is the output of the autoregressive time step
-                                plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
+                                # plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
 
                                 
                                 validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
