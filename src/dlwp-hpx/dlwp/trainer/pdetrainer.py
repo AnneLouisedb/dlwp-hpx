@@ -66,7 +66,7 @@ class CustomMSELoss(torch.nn.Module):
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         MSEloss = torch.nn.MSELoss(reduction=self.reduction)
-        return MSEloss(input, target, reduction=self.reduction)
+        return MSEloss(input, target)
 
 
 class Trainer():
@@ -370,10 +370,8 @@ class Trainer():
                 
                             output = self.model(x_in, time= time_tensor * self.time_multiplier) # used to be x_in
                             print("OUTPUT SHAPES,", output.shape) # OUTPUT SHAPES, torch.Size([8, 12, 1, 1, 32, 32])
-
-                        
                             target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
-                            train_loss = self.train_criterion(pred = output, target = target)
+                            train_loss = self.train_criterion(input = output, target = target)
 
                             
 
