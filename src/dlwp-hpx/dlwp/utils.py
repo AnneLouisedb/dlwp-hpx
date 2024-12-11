@@ -76,8 +76,8 @@ def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sam
 
     # set the dimensions to the x and y axis length of the original input
     # these have to be the latitude and longitude values of the xarray
-    fft_da = xr.DataArray(amplitude_spectrum_output, dims = ['latitude', 'longitude'] )
-    fft_target = xr.DataArray(amplitude_spectrum_target, dims = ['latitude', 'longitude'])
+    fft_da = xr.DataArray(amplitude_spectrum_output, dims = ['longitude'] )
+    fft_target = xr.DataArray(amplitude_spectrum_target, dims = ['longitude'])
 
 
     fig, ax = plt.subplots(figsize=(20, 10))
@@ -108,7 +108,7 @@ def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sam
     ax.set_title(f'Zonal FFT Amplitude Spectrum Distribution')
     ax.legend(title='Latitude')
     ax.grid(True, linestyle='--', alpha=0.7)
-    ax.set_ylim(0, 80000)
+    ax.set_ylim(0, 60000)
 
 
     # Generate filename if not provided
