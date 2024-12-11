@@ -101,12 +101,14 @@ class ConditionalUNetEncoder(th.nn.Module):
         This 'conditional' encoder takes time embeddings in the forward pass. 
 
     """
+    # original:  input for decoder torch.Size([8, 12, 1, 1, 32, 32]) # B, F, T, C, H, W (batch, fold, time, channel, height, width)
+    # changed input: input for decoder torch.Size([8, 12, 1, 2, 32, 32])
     def __init__(
             self,
             conv_block: DictConfig,
             down_sampling_block: DictConfig,
             recurrent_block: DictConfig = None,
-            input_channels: int = 3,
+            input_channels: int = 3, # original code runs on this input channel?
             n_channels: Sequence = (16, 32, 64),
             n_layers: Sequence = (2, 2, 1),
             dilations: list = None,
@@ -124,7 +126,8 @@ class ConditionalUNetEncoder(th.nn.Module):
             dilations = [1 for _ in range(len(n_channels))]
 
         # Build encoder
-        old_channels = input_channels
+        old_channels = input_channels + 1  # double the input channels since we add another input
+        print("INPUT CHANNEL", old_channels )
         self.encoder = []
         for n, curr_channel in enumerate(n_channels): 
             modules = list()
@@ -142,8 +145,8 @@ class ConditionalUNetEncoder(th.nn.Module):
             modules.append(instantiate(
                 config=conv_block,
                 in_channels=old_channels,
-                latent_channels=curr_channel,
-                out_channels=curr_channel,
+                latent_channels=curr_channel ,
+                out_channels=curr_channel ,
                 dilation=dilations[n],
                 n_layers=n_layers[n], # number of layers in this convolutional block?
                 enable_nhwc=enable_nhwc,
@@ -151,12 +154,14 @@ class ConditionalUNetEncoder(th.nn.Module):
                 time_embed_dim = time_embed_dim
                 ))
             old_channels = curr_channel
+            print("channel?", curr_channel)
 
             self.encoder.append(th.nn.Sequential(*modules))
         
        
         #each of these has to be conditional!
         self.encoder = th.nn.ModuleList(self.encoder)
+        
 
     def forward(self, inputs: Sequence, time_emb: th.Tensor) -> Sequence:
         # time_emb depend on the hidden features
@@ -168,6 +173,9 @@ class ConditionalUNetEncoder(th.nn.Module):
                 sequential_output = inputs
                 for sublayer in layer:
                     if isinstance(sublayer, ConditionedBlock):
+                        print(sequential_output.shape)
+                        print("what is the block?", sublayer)
+                    
                         sequential_output = sublayer(sequential_output, time_emb)
                     else:
                         sequential_output = sublayer(sequential_output)

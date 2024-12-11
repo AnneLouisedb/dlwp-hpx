@@ -472,16 +472,17 @@ class TimeSeriesDataset(Dataset):
         
     def get_mean_std_per_week(self):
         mean_std_dict = {}
-        for var in self.fine_scaled_vars:
-                if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
-                    print(f"Special spacing for {var}")
-                    # Apply temporal-spatial fine scaling
-                    weeks = self.ds['time'].dt.isocalendar().week.values
-                    for j, week in enumerate(weeks):
-                        mean = self.ds[var].groupby('time.week').mean().sel(week=week).values
-                        std = self.ds[var].groupby('time.week').std().sel(week=week).values
-                        mean_std_dict[var][week] = {'mean': mean, 'std': std}
-        print(f"Collected means per week for variable {var}")
+        if self.fine_scaled_vars:
+            for var in self.fine_scaled_vars:
+                    if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
+                        print(f"Special spacing for {var}")
+                        # Apply temporal-spatial fine scaling
+                        weeks = self.ds['time'].dt.isocalendar().week.values
+                        for j, week in enumerate(weeks):
+                            mean = self.ds[var].groupby('time.week').mean().sel(week=week).values
+                            std = self.ds[var].groupby('time.week').std().sel(week=week).values
+                            mean_std_dict[var][week] = {'mean': mean, 'std': std}
+            print(f"Collected means per week for variable {var}")
         return mean_std_dict
 
     def get_constants(self):
@@ -507,7 +508,7 @@ class TimeSeriesDataset(Dataset):
                 'mean': 0. if isinstance(values['mean'], str) else values['mean'],
                 'std': 1. if isinstance(values['std'], str) else values['std']
             }
-            self.fine_scaled_vars[var] = values 
+           # self.fine_scaled_vars[var] = values 
         
         scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' or 'spatial_fine'
         scaling_df.loc['zeros'] = {'mean': 0., 'std': 1.}
@@ -653,10 +654,8 @@ class TimeSeriesDataset(Dataset):
 
         inputs_result = [inputs]
         if self.add_insolation:
-            print(inputs_results.shape)
-            print("WHAT IS ADD ISOLATION")
             inputs_result.append(decoder_inputs)
-            print(inputs_results.shape)
+            
 
         # we need to transpose channels and data:
         # [B, T, C, F, H, W] -> [B, F, T, C, H, W]

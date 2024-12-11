@@ -248,9 +248,12 @@ class Trainer():
         for k_scalar in self.scheduler.timesteps:
             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
-            x_in = inputs[0] + y_noised
-            x_in = [inputs[0], x_in] # conditioning input, actual input
+          
+            # this has to be a torch cat over the third dimension TO DO             
+            x_in = torch.cat([inputs[0], y_noised], axis=3)    
+            x_in = [x_in, inputs[1]] # with solar insolation which is the inputs[1]
 
+   
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
             print("PRD OUTPUT?", pred.shape) 
             
@@ -353,27 +356,29 @@ class Trainer():
                         with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
 
                             print("Manual training!!?")  
-                            assert len(inputs) == 1
-
+                            # make a k value
                             k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
                             k_scalar = k.item()
                             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
                             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
-                            
+                            # constructing the noise factor
                             noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
                             noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
                             signal_factor = 1 - noise_factor
 
                             noise = torch.randn_like(self.static_tar)
                             y_noised = self.scheduler.add_noise(target, noise, k)
+                            # this has to be a torch cat over the third dimension TO DO
+                            
+                            x_in = torch.cat([inputs[0], y_noised], axis=3)
+                    
+                            #print("cat the input", x_in.shape) #
 
-                            #print("y_noised", y_noised.shape) 
+                            x_in = [x_in, inputs[1]] # with solar insolation which is the inputs[1]
 
-                            x_in = inputs[0] + y_noised
-                            x_in = [inputs[0], x_in]
-                
+                          
                             output = self.model(x_in, time= time_tensor * self.time_multiplier)
-                            #print("OUTPUT SHAPES,", output.shape) 
+                       
                             target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
                             train_loss = self.train_criterion(input = output, target = target)
 
