@@ -529,32 +529,6 @@ class TimeSeriesDataset(Dataset):
         except (ValueError, KeyError):
             raise KeyError(f"one or more of the target data variables f{list(self.ds.channel_out)} not found in the "
                            f"scaling config dict data.scaling ({list(self.scaling.keys())})")
-        
-    def _process_scaling_value(self, value, scaling_type):
-        """
-        Process scaling values for different scaling methods.
-
-        This method handles three types of scaling:
-        1. Default scaling: Uses pre-computed values.
-        2. Temporal-spatial fine scaling: Computes statistics for each week and grid cell.
-        3. Spatial fine scaling: Computes statistics for each grid cell across all time points.
-        """
-        if isinstance(value.values[0], str) and value.values[0] == 'temporal_spatial_fine':
-            """ Removing local seasonal trends, and capturing local variability. Cmputing the mean and std, for each week of the year, for each grid cell."""
-            if scaling_type == "mean":
-                return self.ds.groupby(self.ds["time"].dt.isocalendar().week).mean("time")  # mean at gridpoint i, at week w computed across all years
-            elif scaling_type == "std":
-                return  self.ds.groupby(self.ds["time"].dt.isocalendar().week).std("time") # mean standard deviation at gridpoint i, at week w computed across all years
-        
-        elif isinstance(value.values[0], str) and value.values[0] == 'spatial_fine':
-            # mean and std are computed for each gridpoint, but acrosss ALL time points. This method preserves spatial anomalies. 
-            if scaling_type == "mean":
-                return self.ds.mean("time") 
-            elif scaling_type == "std":
-                return  self.ds.std("time")
-        else:
-            pass
-       
             
     def __len__(self):
         if self.forecast_mode:
@@ -637,15 +611,15 @@ class TimeSeriesDataset(Dataset):
                         # Apply temporal-spatial fine scaling
                         weeks = self.ds['time'].isel(**batch).dt.isocalendar().week.values
                         for j, week in enumerate(weeks):
-                            mean = self.ds[var].groupby('time.week').mean().sel(week=week).values
-                            std = self.ds[var].groupby('time.week').std().sel(week=week).values
+                            mean = self.mean_std_dict[var][week]['mean']
+                            std = self.mean_std_dict[var][week]['std']
                             target_array[j, i] = (target_array[j, i] - mean) / std
-                    
-                    elif self.fine_scaled_vars[var]['mean'] == 'spatial_fine':
-                        # Apply spatial fine scaling
-                        mean = self.ds[var].mean('time').values
-                        std = self.ds[var].std('time').values
-                        target_array[:, i] = (target_array[:, i] - mean) / std
+                            
+                    # elif self.fine_scaled_vars[var]['mean'] == 'spatial_fine':
+                    #     # Apply spatial fine scaling
+                    #     mean = self.ds[var].mean('time').values
+                    #     std = self.ds[var].std('time').values
+                    #     target_array[:, i] = (target_array[:, i] - mean) / std
 
 
         logger.log(5, "loaded batch data in %0.2f s", time.time() - load_time)
