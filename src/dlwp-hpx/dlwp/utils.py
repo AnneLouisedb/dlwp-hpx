@@ -83,30 +83,28 @@ def plot_single_step_frequency_spectrum(output, target, spatial_domain_size, sam
     fig, ax = plt.subplots(figsize=(20, 10))
     # Prepare data for boxplot
     data = []
-    for lat in fft_da.latitude.values:
-        for wn in range(1, 15):  # Adjust range as needed
-            amplitudes = fft_da.sel(latitude=lat).isel(longitude=wn).values
-            data.extend([(lat, wn, amp) for amp in amplitudes])
+    for wn in range(1, 15):  # Adjust range as needed
+        amplitudes = fft_da.isel(longitude=wn).values
+        data.extend([(1, wn, amp) for amp in amplitudes ])
 
     # Create DataFrame
-    df_output = pd.DataFrame(data, columns=['Latitude', 'Wavenumber', 'Amplitude'])
+    df_output = pd.DataFrame(data, columns=['Longitude', 'Wavenumber', 'Amplitude'])
 
     data_target = []
-    for lat in fft_target.latitude.values:
-        for wn in range(1, 15):
-            amplitudes = fft_target.sel(latitude=lat).isel(longitude=wn).values
-            data_target.extend([(lat, wn, amp) for amp in amplitudes])
+    for wn in range(1, 15):
+        amplitudes = fft_target.isel(longitude=wn).values
+        data_target.extend([(1, wn, amp) for amp in amplitudes])
 
-    df_target = pd.DataFrame(data_target, columns=['Latitude', 'Wavenumber', 'Amplitude'])
+    df_target = pd.DataFrame(data_target, columns=['Longitude', 'Wavenumber', 'Amplitude'])
 
     # Create combined boxplot
-    sns.boxplot(x='Wavenumber', y='Amplitude', hue='Latitude', data=pd.concat([df_output, df_target]), ax=ax)
+    sns.boxplot(x='Wavenumber', y='Amplitude', hue='Longitude', data=pd.concat([df_output, df_target]), ax=ax)
 
     # Customize the plot
     ax.set_xlabel('Wavenumber')
     ax.set_ylabel('Amplitude')
     ax.set_title(f'Zonal FFT Amplitude Spectrum Distribution')
-    ax.legend(title='Latitude')
+    ax.legend(title='Latitude fixed')
     ax.grid(True, linestyle='--', alpha=0.7)
     ax.set_ylim(0, 60000)
 

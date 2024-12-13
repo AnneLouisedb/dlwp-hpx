@@ -127,7 +127,7 @@ class ConditionalUNetEncoder(th.nn.Module):
 
         # Build encoder
         old_channels = input_channels + 1  # double the input channels since we add another input
-        print("INPUT CHANNEL", old_channels )
+        
         self.encoder = []
         for n, curr_channel in enumerate(n_channels): 
             modules = list()
@@ -154,8 +154,7 @@ class ConditionalUNetEncoder(th.nn.Module):
                 time_embed_dim = time_embed_dim
                 ))
             old_channels = curr_channel
-            print("channel?", curr_channel)
-
+          
             self.encoder.append(th.nn.Sequential(*modules))
         
        
@@ -173,9 +172,7 @@ class ConditionalUNetEncoder(th.nn.Module):
                 sequential_output = inputs
                 for sublayer in layer:
                     if isinstance(sublayer, ConditionedBlock):
-                        print(sequential_output.shape)
-                        print("what is the block?", sublayer)
-                    
+                       
                         sequential_output = sublayer(sequential_output, time_emb)
                     else:
                         sequential_output = sublayer(sequential_output)

@@ -519,8 +519,12 @@ class HEALPixRecUNet(th.nn.Module):
                 hidden_channels = self.encoder.n_channels[-1]
                 time_emb = self.time_embed(fourier_embedding(time, hidden_channels, device = input_tensor.device))
                 th.cuda.nvtx.range_push(f"Forward encoder with diffusion")  
+                print("Forwarding with a time embedding?")
                 encodings = self.encoder(input_tensor, time_emb)
             else:
+
+                print("Forwarding WITHOUT time embedding?")
+                print(input_tensor.shape)
                 encodings = self.encoder(input_tensor)
 
 
