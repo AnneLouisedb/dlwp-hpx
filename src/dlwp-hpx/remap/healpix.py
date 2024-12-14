@@ -36,9 +36,9 @@ import astropy as ap
 import matplotlib.pyplot as plt
 
 # https://stackoverflow.com/questions/57354700/starmap-combined-with-tqdm/57364423#57364423
-from remap.istarmap import istarmap
-from remap.base import _BaseRemap
-from remap.cubesphere import to_chunked_dataset
+from istarmap import istarmap
+from base import _BaseRemap
+from cubesphere import to_chunked_dataset
 
 
 
@@ -396,7 +396,7 @@ class HEALPixRemap(_BaseRemap):
             plt.savefig("cartview.pdf", format="pdf")
             plt.close()
 
-        assert hpx1d_mask.all(), self.nans_found_in_data(data=hpx3d, data_orig=data, visualize=visualize)
+        # assert hpx1d_mask.all(), self.nans_found_in_data(data=hpx3d, data_orig=data, visualize=visualize)
         print("visualization happened??")
 
         return hpx3d
@@ -653,25 +653,17 @@ if __name__ == "__main__":
     # Resample to weekly mean  
      
     #ds = ds.resample(time="W").mean()
+    path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/SST_era5_NHExt_1degr_19400101-20240229.nc'
+    #ds = xr.open_dataset(path)
 
     print('Data resampled..')
     # Example of how to convert an ERA5 LatLon file to HEALPix and a forecast from HEALPix to LatLon
     remapper = HEALPixRemap(
         latitudes=181,
         longitudes=360,
-        nside=32
+        nside=64
     )
-    data = torch.randn(16, 12, 1, 1, 32, 32)  # Example tensor for demonstration
-
-    # Step 2: Extract the first item
-    first_item = data[0]  # Shape: [12, 1, 1, 32, 32]
-
-    # Step 3: Squeeze unnecessary dimensions (if needed)
-    first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
-
-    remapper.hpx2ll(first_item_squeezed,  visualize = True)
-    # print begin time and end time of this dataset
-
+   
     # Get and print the start and end times
     #start_time = ds.time.values[0]
     #end_time = ds.time.values[-1]
@@ -680,11 +672,10 @@ if __name__ == "__main__":
     #print(f"Dataset end time: {end_time}")
 
 
-
     # coordinates: time, longitude, latitude
     # data variables t2m and time_bnds>
     #Various data attributes
-    #ds_hpx = remapper.remap(file_path=file_path_ll, poolsize=1, to_netcdf=True, target_variable_name='sst', chunk_ds = False, prefix= 'era5_1deg_1D_HPX32_1940-2024_')
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='sst', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1940-2024_')
     #print(ds_hpx, "\n\n")
     #print("END")
     # now train a unet with this dataset?

@@ -14,7 +14,7 @@ import xarray as xr
 import os
 import subprocess
 import warnings
-from remap.base import _BaseRemap
+from base import _BaseRemap
 
 
 def to_chunked_dataset(ds, chunking):

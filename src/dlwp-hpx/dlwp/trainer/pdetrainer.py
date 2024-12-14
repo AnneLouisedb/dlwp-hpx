@@ -354,8 +354,7 @@ class Trainer():
 
                     if self.amp_enable:
                         with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
-
-                            print("Manual training!!?")  
+ 
                             # make a k value
                             k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
                             k_scalar = k.item()
