@@ -36,10 +36,14 @@ import astropy as ap
 import matplotlib.pyplot as plt
 
 # https://stackoverflow.com/questions/57354700/starmap-combined-with-tqdm/57364423#57364423
-from istarmap import istarmap
-from base import _BaseRemap
-from cubesphere import to_chunked_dataset
-
+try:
+    from istarmap import istarmap
+    from base import _BaseRemap
+    from cubesphere import to_chunked_dataset
+except:
+    from remap.istarmap import istarmap
+    from remap.base import _BaseRemap
+    from remap.cubesphere import to_chunked_dataset
 
 
 def fill_nan_with_mean(data):
@@ -653,7 +657,11 @@ if __name__ == "__main__":
     # Resample to weekly mean  
      
     #ds = ds.resample(time="W").mean()
-    path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/SST_era5_NHExt_1degr_19400101-20240229.nc'
+    #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/SST_era5_NHExt_1degr_19400101-20240229.nc'
+    #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/T2M_era5_Global_1degr_19400101-20240229.nc'
+    #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/OLR_era5_tropics_1degr_19400101_20240229.nc'
+    #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/STREAM250_era5_Global_1degr_19400101_20240229.nc'
+    path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/STREAM500_era5_Global_1degr_19400101_20240229.nc'
     #ds = xr.open_dataset(path)
 
     print('Data resampled..')
@@ -675,7 +683,7 @@ if __name__ == "__main__":
     # coordinates: time, longitude, latitude
     # data variables t2m and time_bnds>
     #Various data attributes
-    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='sst', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1940-2024_')
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='STREAM500', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1940-2024_')
     #print(ds_hpx, "\n\n")
     #print("END")
     # now train a unet with this dataset?
