@@ -472,19 +472,26 @@ class TimeSeriesDataset(Dataset):
         
     def get_mean_std_per_week(self):
         mean_std_dict = {}
+        
         if self.fine_scaled_vars:
+            weeks = self.ds['time'].dt.isocalendar().week.values
+            unique_weeks = np.unique(weeks)
+            
             for var in self.fine_scaled_vars:
-                    if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
-                        print(f"Special spacing for {var}")
-                        # Apply temporal-spatial fine scaling
-                        weeks = self.ds['time'].dt.isocalendar().week.values
-                        for j, week in enumerate(weeks):
-                            mean = self.ds[var].groupby('time.week').mean().sel(week=week).values
-                            std = self.ds[var].groupby('time.week').std().sel(week=week).values
-                            mean_std_dict[var][week] = {'mean': mean, 'std': std}
-            print(f"Collected means per week for variable {var}")
+                mean_std_dict[var] = {}
+                
+                channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
+                print("DATASET - spatial fine scaling")
+                print(self.ds['inputs'])
+        
+                for j, week in enumerate(unique_weeks):
+                    mean = self.ds['inputs'][:, channel_index, :, :, :].groupby('time.week').mean().sel(week=week).values
+                    std = self.ds['inputs'][:, channel_index, :, :, :].groupby('time.week').std().sel(week=week).values
+                    mean_std_dict[var][week] = {'mean': mean, 'std': std}
+                    
         return mean_std_dict
 
+    
     def get_constants(self):
         # extract from ds:
         const = self.ds.constants.values
@@ -508,9 +515,10 @@ class TimeSeriesDataset(Dataset):
                 'mean': 0. if isinstance(values['mean'], str) else values['mean'],
                 'std': 1. if isinstance(values['std'], str) else values['std']
             }
-           # self.fine_scaled_vars[var] = values 
-        
-        scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' or 'spatial_fine'
+            if values['mean'] == 'temporal_spatial_fine':
+                self.fine_scaled_vars[var] = values  # Include only if the mean is 'temporal_spatial_fine'
+
+        scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' 
         scaling_df.loc['zeros'] = {'mean': 0., 'std': 1.}
         scaling_da = scaling_df.to_xarray().astype('float32')
         
@@ -575,14 +583,15 @@ class TimeSeriesDataset(Dataset):
         batch = {'time': slice(*time_index)}
         load_time = time.time()
 
-        input_array = self.ds['inputs'].isel(**batch).to_numpy()
+        input_array = self.ds['inputs'].isel(**batch).to_numpy() # channel dimension of the batch??
         input_array = (input_array - self.input_scaling['mean']) / self.input_scaling['std']
-      
         
-
+        print("Input array shape!", input_array.shape)
+      
         # Apply fine scaling for input variables
         for i, var in enumerate(self.ds.channel_in.values):
             if var in self.fine_scaled_vars:
+                channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
                
                 if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
                     weeks = self.ds['time'].isel(**batch).dt.isocalendar().week.values
@@ -590,16 +599,12 @@ class TimeSeriesDataset(Dataset):
                     for j, week in enumerate(weeks):
                         mean = self.mean_std_dict[var][week]['mean']
                         std = self.mean_std_dict[var][week]['std']
-                        input_array[j, i] = (input_array[j, i] - mean) / std
                         
-                # elif self.fine_scaled_vars[var]['mean'] == 'spatial_fine':
-                #     # Apply spatial fine scaling
-                #     mean = self.ds[var].mean('time').values
-                #     std = self.ds[var].std('time').values
-                #     input_array[:, i] = (input_array[:, i] - mean) / std
-                   
+                        input_array[j, i] = (input_array[j, i] - mean) / std
+            else:
+                break
 
-
+                        
         if not self.forecast_mode:
             target_array = self.ds['targets'].isel(**batch).to_numpy()
             target_array = (target_array - self.target_scaling['mean']) / self.target_scaling['std']
@@ -616,13 +621,7 @@ class TimeSeriesDataset(Dataset):
                             std = self.mean_std_dict[var][week]['std']
                             target_array[j, i] = (target_array[j, i] - mean) / std
                             
-                    # elif self.fine_scaled_vars[var]['mean'] == 'spatial_fine':
-                    #     # Apply spatial fine scaling
-                    #     mean = self.ds[var].mean('time').values
-                    #     std = self.ds[var].std('time').values
-                    #     target_array[:, i] = (target_array[:, i] - mean) / std
-
-
+                   
         logger.log(5, "loaded batch data in %0.2f s", time.time() - load_time)
         torch.cuda.nvtx.range_pop()
 

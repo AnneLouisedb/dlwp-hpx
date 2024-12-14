@@ -309,7 +309,12 @@ class HEALPixRemap(_BaseRemap):
         fc_ds_hpx = xr.open_dataset(forecast_path)
         if times is not None: fc_ds_hpx = fc_ds_hpx.sel({"time": times})
 
-        dims = [fc_ds_hpx.dims["time"], fc_ds_hpx.dims["step"], self.latitudes, self.longitudes]
+        try:
+            dims = [fc_ds_hpx.dims["time"], fc_ds_hpx.dims["step"], self.latitudes, self.longitudes]
+            
+        except:
+            fc_ds_hpx.coords["step"] = fc_ds_hpx.dims["time"]
+            dims = [fc_ds_hpx.dims["time"], fc_ds_hpx.dims["time"], self.latitudes, self.longitudes]
         
         if poolsize < 2:
             # Sequential sample mapping via for-loop
