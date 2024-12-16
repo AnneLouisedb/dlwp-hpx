@@ -24,3 +24,4 @@ cube_dim: ${data.cube_dim}
 num_workers: ${num_workers}
 pin_memory: true
 prebuilt_dataset: ${data.prebuilt_dataset}
+only_winter: false

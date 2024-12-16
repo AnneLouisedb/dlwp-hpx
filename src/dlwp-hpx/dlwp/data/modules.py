@@ -53,7 +53,8 @@ class TimeSeriesDataModule():
             num_workers: int = 4,
             pin_memory: bool = True,
             prebuilt_dataset: bool = True,
-            forecast_init_times: Optional[Sequence] = None
+            forecast_init_times: Optional[Sequence] = None,
+            only_winter: bool = False
     ):
         """
         pytorch-lightning module for complete model train, validation, and test data loading. Uses
@@ -125,6 +126,7 @@ class TimeSeriesDataModule():
         self.pin_memory = pin_memory
         self.prebuilt_dataset = prebuilt_dataset
         self.forecast_init_times = forecast_init_times
+        self.only_winter = only_winter
 
         self.train_dataset = None
         self.val_dataset = None
@@ -179,7 +181,8 @@ class TimeSeriesDataModule():
                         suffix=self.suffix,
                         batch_size=self.dataset_batch_size,
                         scaling=self.scaling,
-                        overwrite=False
+                        overwrite=False,
+                        
                     )
 
                 # wait for rank 0 to complete, because then the files are guaranteed to exist
@@ -208,7 +211,7 @@ class TimeSeriesDataModule():
                     suffix=self.suffix,
                     batch_size=self.dataset_batch_size,
                     scaling=self.scaling,
-                    overwrite=False
+                    overwrite=False,
                 )
                 
                 dataset = open_fn(directory=self.dst_directory, dataset_name=self.dataset_name,
@@ -222,6 +225,7 @@ class TimeSeriesDataModule():
                                   batch_size=self.batch_size)
             
         if self.splits is not None and self.forecast_init_times is None:
+            print("Train dataset check winter?", self.only_winter)
             self.train_dataset = TimeSeriesDataset(
                 dataset.sel(time=slice(self.splits['train_date_start'], self.splits['train_date_end'])),
                 scaling=self.scaling,
@@ -232,7 +236,8 @@ class TimeSeriesDataModule():
                 gap=self.gap,
                 batch_size=self.dataset_batch_size,
                 drop_last=self.drop_last,
-                add_insolation=self.add_insolation
+                add_insolation=self.add_insolation,
+                only_winter = self.only_winter
             )
             
             self.val_dataset = TimeSeriesDataset(
@@ -246,7 +251,8 @@ class TimeSeriesDataModule():
                 batch_size=self.dataset_batch_size,
                 #drop_last=False,
                 drop_last=self.drop_last,
-                add_insolation=self.add_insolation
+                add_insolation=self.add_insolation,
+                only_winter = self.only_winter
             )
             self.test_dataset = TimeSeriesDataset(
                 dataset.sel(time=slice(self.splits['test_date_start'], self.splits['test_date_end'])),
@@ -258,7 +264,8 @@ class TimeSeriesDataModule():
                 gap=self.gap,
                 batch_size=self.dataset_batch_size,
                 drop_last=False,
-                add_insolation=self.add_insolation
+                add_insolation=self.add_insolation,
+                only_winter = self.only_winter
             )
         else:
             self.test_dataset = TimeSeriesDataset(
@@ -272,7 +279,8 @@ class TimeSeriesDataModule():
                 batch_size=self.dataset_batch_size,
                 drop_last=False,
                 add_insolation=self.add_insolation,
-                forecast_init_times=self.forecast_init_times
+                forecast_init_times=self.forecast_init_times,
+                only_winter = self.only_winter
             )
 
     def train_dataloader(self, num_shards=1, shard_id=0) -> DataLoader:

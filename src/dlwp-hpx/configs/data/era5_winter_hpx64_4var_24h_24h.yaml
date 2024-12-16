@@ -1,0 +1,31 @@
+defaults:
+  - module: time_series
+  - scaling: classic
+  - splits: default
+
+src_directory: /home/adboer/dlwp-hpx/src/dlwp-hpx/data
+dst_directory: /home/adboer/dlwp-hpx/src/dlwp-hpx/data
+dataset_name: era5_hpx64_1var_24h_24h
+prefix: era5_1deg_1D_HPX32_1940-2024_
+suffix: ''
+data_format: classic
+input_variables:
+  #- scaled_temperature 
+  - t2m
+  - sst
+  - ttr # olr?
+  - stream # this refers to the variable name inside (so we should rename the stream 500)
+output_variables: null
+constants:
+  #land_sea_mask: lsm
+  #topography: z
+input_time_dim: 1 # this was 2
+output_time_dim: 1 # this was 4
+data_time_step: 24h
+time_step: 24h
+gap: 24h
+add_insolation: true
+nside: 64
+cube_dim: ${data.nside}
+prebuilt_dataset: true
+only_winter: True
