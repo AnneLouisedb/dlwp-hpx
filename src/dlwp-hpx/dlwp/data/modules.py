@@ -99,6 +99,7 @@ class TimeSeriesDataModule():
                 - this is only applied to the test dataloader
                 - providing this parameter configures the data loader to only produce this number of samples, and
                     NOT produce any target array.
+        :param only_winter: A boolean, if true we only include the extended winter months (Oct - Feb).
         """
         super().__init__()
         self.src_directory = src_directory
