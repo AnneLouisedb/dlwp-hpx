@@ -418,6 +418,8 @@ class TimeSeriesDataset(Dataset):
         self.forecast_init_times = forecast_init_times
         self.forecast_mode = self.forecast_init_times is not None
 
+        
+
         # Time stepping
         if (self.time_step % self.data_time_step).total_seconds() != 0:
             raise ValueError(f"'time_step' must be a multiple of 'data_time_step' "
@@ -434,9 +436,12 @@ class TimeSeriesDataset(Dataset):
                 logger.warning("providing 'forecast_init_times' to TimeSeriesDataset requires `batch_size=1`; "
                                "setting it now")
             self._forecast_init_indices = np.array(
-                [int(np.where(self.ds['time'] == s)[0]) for s in self.forecast_init_times],
+                [np.where(self.ds['time'] == s)[0] for s in self.forecast_init_times],
                 dtype='int'
             ) - ((self.input_time_dim - 1) * self.interval)
+            print("forecast indices?")
+            print(self._forecast_init_indices )
+            self._forecast_init_indices = [100, 101, 102, 103, 104]
         else:
             self._forecast_init_indices = None
 
@@ -466,31 +471,80 @@ class TimeSeriesDataset(Dataset):
         self.fine_scaled_vars = {}
         self._get_scaling_da()
 
-        # create dictionary with weekly averaged values per gridpoint
-        self.mean_std_dict = self.get_mean_std_per_week()
-         
         
-    def get_mean_std_per_week(self):
-        mean_std_dict = {}
+    def get_mean_std(self, var): 
+        channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
+        grouped_data = self.ds['inputs'][:, channel_index, :, :, :]
         
-        if self.fine_scaled_vars:
-            weeks = self.ds['time'].dt.isocalendar().week.values
-            unique_weeks = np.unique(weeks)
-            
-            for var in self.fine_scaled_vars:
-                mean_std_dict[var] = {}
-                
-                channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
-                print("DATASET - spatial fine scaling")
-                print(self.ds['inputs'])
-        
-                for j, week in enumerate(unique_weeks):
-                    mean = self.ds['inputs'][:, channel_index, :, :, :].groupby('time.week').mean().sel(week=week).values
-                    std = self.ds['inputs'][:, channel_index, :, :, :].groupby('time.week').std().sel(week=week).values
-                    mean_std_dict[var][week] = {'mean': mean, 'std': std}
-                    
-        return mean_std_dict
+        # Calculate mean and std for all weeks
+        mean = grouped_data.mean(dim='time')
+        std = grouped_data.std(dim='time')
+           
+        out_mean = np.mean(mean.values)
+        out_std = np.mean(std.values) 
+                        
+        return out_mean, out_std
 
+             
+    # def get_mean_std_per_week(self):
+    #     mean_std_dict = {}
+        
+    #     if self.fine_scaled_vars:
+    #         weeks = self.ds['time'].dt.isocalendar().week.values
+    #         unique_weeks = np.unique(weeks)
+            
+    #         for var in self.fine_scaled_vars:
+    #             print(f"VARIABLE CHECK {var}")
+    #             mean_std_dict[var] = {}
+                
+    #             channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
+       
+    #             grouped_data = self.ds['inputs'][:, channel_index, :, :, :].groupby('time.week')
+                
+    #             # Calculate mean and std for all weeks
+    #             weekly_mean = grouped_data.mean(dim='time')
+    #             weekly_std = grouped_data.std(dim='time')
+                    
+    #             # Store results in mean_std_dict
+    #             for week in unique_weeks:
+    #                 mean_std_dict[var][week] = {
+    #                     'mean': weekly_mean.sel(week=week).values,
+    #                     'std': weekly_std.sel(week=week).values
+    #                 }
+    #                 # Properly scale values using .loc[]
+    #                 self.ds['inputs'][:, channel_index, :, :, :].loc[week_mask] -= weekly_mean.sel(week=week).values  # Subtract mean
+    #                 self.ds['inputs'][:, channel_index, :, :, :].loc[week_mask] /= weekly_std.sel(week=week).values  # Divide by std
+            
+       #return mean_std_dict
+   
+
+    # def scale_values_per_week(self):
+    #     # Assuming 'inputs' is your xarray Dataset
+    #     inputs = self.ds['inputs']  # Adjust according to your actual dataset structure
+        
+    #     # Iterate over each variable that needs to be scaled
+    #     for var in self.fine_scaled_vars:
+    #         print(f"Scaling variable: {var}")
+            
+    #         # Get the channel index for the current variable
+    #         channel_index = inputs.channel_in.values.tolist().index(var)
+
+    #         # Get weeks from the time dimension
+    #         weeks = self.ds['time'].dt.isocalendar().week.values
+            
+    #         for week in np.unique(weeks):
+    #             # Retrieve mean and std from mean_std_dict
+    #             mean = self.mean_std_dict[var][week]['mean']
+    #             std = self.mean_std_dict[var][week]['std']
+                
+    #             # Create a mask for the current week
+    #             week_mask = (weeks == week)
+                
+    #             # Properly scale values using .loc[]
+    #             inputs[:, channel_index, :, :, :].loc[week_mask] -= mean  # Subtract mean
+    #             inputs[:, channel_index, :, :, :].loc[week_mask] /= std   # Divide by std
+
+     
     
     def get_constants(self):
         # extract from ds:
@@ -515,18 +569,28 @@ class TimeSeriesDataset(Dataset):
                 'mean': 0. if isinstance(values['mean'], str) else values['mean'],
                 'std': 1. if isinstance(values['std'], str) else values['std']
             }
-            if values['mean'] == 'temporal_spatial_fine':
-                self.fine_scaled_vars[var] = values  # Include only if the mean is 'temporal_spatial_fine'
+
+            # if values['mean'] == 'temporal_spatial_fine':
+            #     print("Global mean != temporal spatial fine")
+            #     # return scaling for this value
+            #     mean, std = self.get_mean_std(var)
+            #     processed_scaling[var] = {
+            #     'mean': mean,
+            #     'std': std }
+                
 
         scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' 
         scaling_df.loc['zeros'] = {'mean': 0., 'std': 1.}
         scaling_da = scaling_df.to_xarray().astype('float32')
-        
+       
         # REMARK: we remove the xarray overhead from these
         try:
             self.input_scaling = scaling_da.sel(index=self.ds.channel_in.values).rename({'index': 'channel_in'})
             self.input_scaling = {"mean": np.expand_dims(self.input_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
                                   "std": np.expand_dims(self.input_scaling["std"].to_numpy(), (0, 2, 3, 4))}
+
+            print("expanded input scaling, mean shape?", self.input_scaling['mean'].shape)
+
         except (ValueError, KeyError):
             raise KeyError(f"one or more of the input data variables f{list(self.ds.channel_in)} not found in the "
                            f"scaling config dict data.scaling ({list(self.scaling.keys())})")
@@ -584,30 +648,16 @@ class TimeSeriesDataset(Dataset):
         load_time = time.time()
 
         input_array = self.ds['inputs'].isel(**batch).to_numpy() # channel dimension of the batch??
-        input_array = (input_array - self.input_scaling['mean']) / self.input_scaling['std']
         
-        print("Input array shape!", input_array.shape)
-      
-        # Apply fine scaling for input variables
-        for i, var in enumerate(self.ds.channel_in.values):
-            if var in self.fine_scaled_vars:
-                channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
-               
-                if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
-                    weeks = self.ds['time'].isel(**batch).dt.isocalendar().week.values
+        input_array = (input_array - self.input_scaling['mean']) / self.input_scaling['std']
 
-                    for j, week in enumerate(weeks):
-                        mean = self.mean_std_dict[var][week]['mean']
-                        std = self.mean_std_dict[var][week]['std']
-                        
-                        input_array[j, i] = (input_array[j, i] - mean) / std
-            else:
-                break
+        input_array = np.nan_to_num(input_array, nan=0.0)
 
-                        
+                
         if not self.forecast_mode:
             target_array = self.ds['targets'].isel(**batch).to_numpy()
             target_array = (target_array - self.target_scaling['mean']) / self.target_scaling['std']
+            target_array = np.nan_to_num(target_array, nan=0.0)
 
             # Apply fine scaling for target variables - if not in the forecast mode?
             for i, var in enumerate(self.ds.channel_out.values):

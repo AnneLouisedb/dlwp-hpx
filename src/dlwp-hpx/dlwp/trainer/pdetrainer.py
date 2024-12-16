@@ -66,10 +66,11 @@ class CustomMSELoss(torch.nn.Module):
         self.reduction = reduction
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+
         MSEloss = torch.nn.MSELoss(reduction=self.reduction)
         return MSEloss(input, target)
 
-
+        
 class Trainer():
     """
     A class for DLWP model training, This class trains a model to predict th next step in a diffusion process?
@@ -255,11 +256,8 @@ class Trainer():
 
    
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
-            print("PRD OUTPUT?", pred.shape) 
-            
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
-            print("Y_NOISED SHAPE", y_noised.shape)  
-
+        
             if save:
                 storing.append(y_noised)
 
@@ -284,7 +282,10 @@ class Trainer():
         return y 
            
     def compute_loss(self, prediction, target):
-        d = ((target-prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
+
+        # B, T, C, (F), H, W
+        d = ((target- prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
+
         return torch.mean(d)
 
     def fit(
@@ -308,8 +309,7 @@ class Trainer():
             self.model.train()
             
             for inputs, target in (pbar := tqdm(self.dataloader_train, disable=(not self.print_to_screen))):
-                print("what is the input shape then?") # two tensors are the input
-               
+                
                 # for inp in inputs:
                 # print("Input size:")
                 #    print(inp.shape)
@@ -352,40 +352,32 @@ class Trainer():
                     # zero grads
                     self.model.zero_grad(set_to_none=True)
 
-                    if self.amp_enable:
-                        with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
- 
-                            # make a k value
-                            k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
-                            k_scalar = k.item()
-                            batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
-                            time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
-                            # constructing the noise factor
-                            noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
-                            noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
-                            signal_factor = 1 - noise_factor
+                    with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
 
-                            noise = torch.randn_like(self.static_tar)
-                            y_noised = self.scheduler.add_noise(target, noise, k)
-                            # this has to be a torch cat over the third dimension TO DO
-                            
-                            x_in = torch.cat([inputs[0], y_noised], axis=3)
-                    
-                            #print("cat the input", x_in.shape) #
+                        # make a k value
+                        k = torch.randint(0, self.scheduler.config.num_train_timesteps, (1,), device=self.device)
+                        k_scalar = k.item()
+                        batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
+                        time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
+                        # constructing the noise factor
+                        noise_factor = self.scheduler.alphas_cumprod.to(self.device)[k]
+                        noise_factor = noise_factor.view(-1, *[1 for _ in range(self.static_inp[0].ndim - 1)]) 
+                        signal_factor = 1 - noise_factor
 
-                            x_in = [x_in, inputs[1]] # with solar insolation which is the inputs[1]
-
-                          
-                            output = self.model(x_in, time= time_tensor * self.time_multiplier)
-                       
-                            target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
-                            train_loss = self.train_criterion(input = output, target = target)
-
-
-                    else:
-                        output = self.model(inputs, 2)
-                        train_loss = self.compute_loss(prediction=output, target=target)
+                        noise = torch.randn_like(self.static_tar)
+                        y_noised = self.scheduler.add_noise(target, noise, k)
+                        # this has to be a torch cat over the third dimension TO DO
+                        
+                        x_in = torch.cat([inputs[0], y_noised], axis=3)
                 
+                        x_in = [x_in, inputs[1]] # with solar insolation which is the inputs[1]
+                        
+                        output = self.model(x_in, time= time_tensor * self.time_multiplier)
+                        
+                        target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
+                        train_loss = self.train_criterion(input = output, target = target)
+
+                    
                     self.gscaler.scale(train_loss).backward()
 
                 # Gradient clipping                
@@ -444,27 +436,21 @@ class Trainer():
                         for v_idx, v_name in enumerate(self.output_variables):
                             validation_stats[1+v_idx] += self.static_losses_eval[v_idx] * bsize
                     else:
-                        if self.amp_enable:
-                            with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
-                                
-                                output = self.predict_next_solution(inputs)
-                                # this is the output of the autoregressive time step
-                                # plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
+                        
+                        with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
+                            
+                            output = self.predict_next_solution(inputs)
+                        
+                            # this is the output of the autoregressive time step
+                            # plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
 
-                                
-                                validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
-                                for v_idx, v_name in enumerate(self.output_variables):
-                                    validation_stats[1+v_idx] += self.criterion(
-                                        output[v_idx], target[v_idx]
-                                        ) * bsize
-                        else:
-                            output = self.model(inputs)
-                            validation_stats[0] += self.compute_loss(prediction=output, target=target) * bsize
+                            # this has to be compute loss!!
+                            validation_stats[0] += self.compute_loss(prediction = output, target = target) * bsize
                             for v_idx, v_name in enumerate(self.output_variables):
                                 validation_stats[1+v_idx] += self.criterion(
-                                    output[v_idx], target[:, :, :, v_idx]
+                                    output[v_idx], target[v_idx]
                                     ) * bsize
-
+                       
                     pbar.set_postfix({"Loss": (validation_stats[0]/validation_stats[-1]).item()})
                    
 
