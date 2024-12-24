@@ -28,4 +28,4 @@ add_insolation: true
 nside: 64
 cube_dim: ${data.nside}
 prebuilt_dataset: true
-
+only_winter: false
