@@ -1,22 +1,25 @@
 
 t2m:
-  mean:  287.33835 #global mean != 'temporal_spatial_fine'
-  std: 4.156222 #'temporal_spatial_fine'
-scaled_temperature:
-  mean: 0.
-  std: 1.
+  mean: 287.1095  
+  std: 15.32 
 t850:
   mean: 281.2710266113281
   std: 12.04991626739502
-stream:
-  mean: 21.2083  #'temporal_spatial_fine' , 
-  std: 535356640. #'temporal_spatial_fine'
+msl: 
+  mean: 100964.87
+  std: 1282.4757
+stream500:
+  mean: 2008995.8
+  std: 42305444.
+stream250:
+  mean: 2594045.5  #'temporal_spatial_fine' , 
+  std: 87912936. #'temporal_spatial_fine'
 ttr:
-  mean: -945896.  #'temporal_spatial_fine'
-  std: 134914.5781 #'temporal_spatial_fine'
+  mean: -948322.4  #'temporal_spatial_fine'
+  std: 137178.39 #'temporal_spatial_fine'
 sst:
-  mean: 287.74655 #'temporal_spatial_fine'
-  std: 4.156222 #'temporal_spatial_fine'
+  mean: 289.8 
+  std: 11.51 
 
 tau300-700:
   mean: 61902.72265625
