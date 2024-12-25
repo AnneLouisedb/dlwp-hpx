@@ -7,6 +7,7 @@ import numpy as np
 import torch as th
 import pandas as pd
 import math
+import torch
 from dlwp.model.modules.healpix import HEALPixPadding, HEALPixLayer
 from dlwp.model.modules.encoder import UNetEncoder, UNet3Encoder, ConditionalUNetEncoder
 from dlwp.model.modules.decoder import UNetDecoder, UNet3Decoder, ConditionalUNetDecoder
@@ -14,7 +15,7 @@ from dlwp.model.modules.blocks import FoldFaces, UnfoldFaces
 from dlwp.model.modules.losses import LossOnStep
 from dlwp.model.modules.utils import Interpolate
 from dlwp.model.modules.utils import fourier_embedding
-
+from diffusers.schedulers import DDPMScheduler
 logger = logging.getLogger(__name__)
 
 
@@ -118,10 +119,14 @@ class CubeSphereUNet(th.nn.Module):
 
         outputs = []
         for step in range(self.integration_steps):
+            print("STEP?")
             if step == 0:
                 input_tensor = self._reshape_inputs(inputs, step)
+                print("TENSOR at 0", input_tensor.shape)
             else:
                 input_tensor = self._reshape_inputs([outputs[-1]] + list(inputs[1:]), step)
+                print("TENSOR", step, input_tensor.shape)
+
             hidden_states = self.encoder(input_tensor)
             outputs.append(self._reshape_outputs(self.decoder(hidden_states)))
 
@@ -174,6 +179,9 @@ class HEALPixUNet(th.nn.Module):
         self.enable_nhwc = enable_nhwc
         self.enable_healpixpad = enable_healpixpad
 
+        print('input time dim?', input_time_dim)
+        print('outputtime dim', output_time_dim)
+        
         #self.output_dim = self.output_channels*self.input_time_dim
 
         # Number of passes through the model, or a diagnostic model with only one output time
@@ -207,6 +215,10 @@ class HEALPixUNet(th.nn.Module):
     @property
     def integration_steps(self):
         return max(self.output_time_dim // self.input_time_dim, 1)
+    
+    @integration_steps.setter
+    def integration_steps(self, value):
+        self._integration_steps = value
 
     def _compute_input_channels(self) -> int:
         return self.input_time_dim * (self.input_channels + self.decoder_input_channels) + self.n_constants
@@ -258,7 +270,7 @@ class HEALPixUNet(th.nn.Module):
 
         # fold faces into batch dim
         res = self.fold(res)
-        
+        print('shape of fole', res.shape)
         return res
 
     def _reshape_outputs(self, outputs: th.Tensor) -> th.Tensor:
@@ -273,33 +285,154 @@ class HEALPixUNet(th.nn.Module):
         return res
     
 
+    def multiple_forward(self, inputs: Sequence, time: th.Tensor = None, z: th.Tensor= None, output_only_last=False) -> th.Tensor:
+        """Function is called in the forecast.py file. At each integration step the full diffusion process (k) is called. 
+        Outputs for each integration step are stacked in the outputs list. """
+        
+        num_refinement_steps = 3
+        time_multiplier = 1000 / num_refinement_steps
+        betas = [4e-7 ** (k / num_refinement_steps) for k in reversed(range(num_refinement_steps + 1))]
+        scheduler = DDPMScheduler(
+                num_train_timesteps=num_refinement_steps + 1,
+                trained_betas=betas,
+                prediction_type="v_prediction", # shouldnt this be epsilon?
+                clip_sample=False,
+            )
+        
+        outputs = []
+        
+        for step in range(self.integration_steps): # [B, F, C*T, H, W]
+            print(f"Integration step {step}")
+            
+            if step == 0:
+                # Add noise to the original input
+                inputs_0 = inputs[0]
+                # print(f"size of output UNET after {step} step", inputs_0.shape)
+
+                y_noised = torch.randn_like(inputs_0, device=inputs[0].device)
+                # inputs_first = inputs_0 + y_noised 
+                inputs_first = torch.cat([inputs_0, y_noised], axis=3)
+                inputs = [inputs_first] + inputs[1:]
+                input_tensor = self._reshape_inputs(inputs, step) 
+                
+            else:
+                
+                inputs_0 = outputs[-1]
+                # print(f"size of output UNET after {step} step", inputs_0.shape)
+
+                y_noised = torch.randn_like(inputs_0, device=inputs[0].device)
+                inputs_first = inputs_0 + y_noised 
+                inputs_first = torch.cat([inputs_0, y_noised], axis=3)
+                
+                input_tensor = self._reshape_inputs([inputs_first] + list(inputs[1:]), step) # replace x_in with outputs[-1] (original)
+                
+                
+            for k_scalar in scheduler.timesteps:
+            
+                print(f"diffusion step {k_scalar}")
+
+                batch_size = input_tensor[0].shape[0] if isinstance(input_tensor, list) else input_tensor.shape[0]
+                time_tensor = torch.full((1,), k_scalar, device= input_tensor.device)
+                # forward step without reshaping of inputs
+                pred = self.special_forward(input_tensor, time=  time_tensor * time_multiplier) 
+                print("predicted value shape?",pred.shape)
+                y_noised = scheduler.step(pred, k_scalar, y_noised).prev_sample
+                print("noised shape?", y_noised.shape)
+            
+                
+            decodings = y_noised 
+            B, F, C, T, H, W = decodings.shape
+            # collapse the input [B, F, C, T, H, W] -> [B*F, C*T, H, W]
+            decodings = decodings.reshape(B*F, C*T, H, W)
+            reshaped = self._reshape_outputs(input_tensor[:, :self.input_channels*self.input_time_dim] + decodings)  
+            outputs.append(reshaped)
+            
+  
+        if output_only_last:
+            res = outputs[-1]
+        else:
+            res = th.cat(outputs, dim=self.channel_dim)
+
+        # output after all integration steps (stacking the solutions) # torch.Size([1, 12, 7, 4, 64, 64]) - 7 = nr. integration steps
+        print("output of unet, shape?", res.shape)
+
+        return res
+    
+    def special_forward(self, inputs: Sequence, time: th.Tensor = None, z: th.Tensor= None, output_only_last=False) -> th.Tensor:
+        
+        outputs = []
+
+        input_tensor = inputs
+    
+        if time is not None:
+            
+            fourier = fourier_embedding(time, self.hidden_channels, device = input_tensor.device) # replaced 1 with 
+            time_emb = self.time_embed(fourier) 
+            encodings = self.encoder(input_tensor, time_emb)
+            decodings = self.decoder(encodings, time_emb)
+        else:
+            encodings = self.encoder(input_tensor)
+            decodings = self.decoder(encodings)
+        
+
+        #reshaped = self._reshape_outputs(decodings)  # Absolute prediction
+        
+        reshaped = self._reshape_outputs(input_tensor[:, :self.input_channels*self.input_time_dim] + decodings)  # Residual prediction
+        outputs.append(reshaped)
+
+  
+        if output_only_last:
+            res = outputs[-1]
+        else:
+            res = th.cat(outputs, dim=self.channel_dim)
+
+       
+        #Output unet shapetorch.Size([8, 12, 1, 4, 64, 64])
+
+        return res
+    
+  
+
     def forward(self, inputs: Sequence, time: th.Tensor = None, z: th.Tensor= None, output_only_last=False) -> th.Tensor:
 
         outputs = []
-        #import time
-        #times = []
+       
         for step in range(self.integration_steps): # [B, F, C*T, H, W]
+            
+           
             if step == 0:
                 inputs_0 = inputs[0]
+                print("shape of inputs", len(inputs))
+                print(inputs[0].shape)
+                print(inputs[1].shape)
+                print(inputs[2].shape) # does not exist
                 #print("first attempt at reshape", inputs[0].shape, inputs[1].shape) # ([12, 12, 1, 32, 32]) torch.Size([12, 12, 1, 32, 32]) -> T = 12 since we have 2 * 2 as input and 2 * 4 as output
                 input_tensor = self._reshape_inputs(inputs, step) # Squashes the time/channel dimension and concatenates in constants and decoder inputs. (would decoder inputs be 4?)
-               # N, F, C, H, W -> N*F, C, H, W
-                #print("reshaping input tensor", input_tensor.shape) # ([192, 4, 32, 32]) -> 12 x 16 = 192 #  (B*F, T*C, H, W)
-                
+                # N, F, C, H, W -> N*F, C, H, W
+                print("reshaping input tensor", input_tensor.shape) # ([192, 4, 32, 32]) -> 12 x 16 = 192 #  (B*F, T*C, H, W)
+               
+            
             else:
-                inputs_0 = outputs[-1]
-                input_tensor = self._reshape_inputs([outputs[-1]] + list(inputs[1:]), step)
+                
+                raise ValueError
+                
                 
             if time is not None:
+                print("STEP integration", step)
                 
-                fourier =fourier_embedding(time, self.hidden_channels, device = input_tensor.device)
+                fourier = fourier_embedding(time, self.hidden_channels, device = input_tensor.device)
                 time_emb = self.time_embed(fourier) 
+                print("what is the dimension of input?", input_tensor.shape)
+                print("shape of the time embedding?", time_emb.shape)
                 encodings = self.encoder(input_tensor, time_emb)
                 decodings = self.decoder(encodings, time_emb)
             else:
                 encodings = self.encoder(input_tensor)
-                decodings = self.decoder(encodings)
+                decodings = self.decoder(encodings) #  B, F, T, C, H, W 
+            # to this formag?
+            #  B, F, T*C, H, W 
             #reshaped = self._reshape_outputs(decodings)  # Absolute prediction
+            
             reshaped = self._reshape_outputs(input_tensor[:, :self.input_channels*self.input_time_dim] + decodings)  # Residual prediction
             outputs.append(reshaped)
 
@@ -308,6 +441,9 @@ class HEALPixUNet(th.nn.Module):
             res = outputs[-1]
         else:
             res = th.cat(outputs, dim=self.channel_dim)
+
+        print("Output of UNET?")
+        print(res.shape)
 
         return res
     

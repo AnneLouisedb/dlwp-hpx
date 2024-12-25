@@ -142,6 +142,7 @@ def open_time_series_dataset_classic_on_the_fly(
         result['constants'] = constants_da
 
     logger.info("merged datasets in %0.1f s", time.time() - merge_time)
+    logger.info("Inputs variables,", list(input_variables))
 
     return result
     
@@ -441,12 +442,24 @@ class TimeSeriesDataset(Dataset):
                 self.batch_size = 1
                 logger.warning("providing 'forecast_init_times' to TimeSeriesDataset requires `batch_size=1`; "
                                "setting it now")
-            self._forecast_init_indices = np.array(
-                [np.where(self.ds['time'] == s)[0] for s in self.forecast_init_times],
-                dtype='int'
-            ) - ((self.input_time_dim - 1) * self.interval)
-            # error here??
-            self._forecast_init_indices = [100, 101, 102, 103, 104]
+            # self._forecast_init_indices = np.array(
+            #     [np.where(self.ds['time'] == s)[0] for s in self.forecast_init_times],
+            #     dtype='int'
+            # ) - ((self.input_time_dim - 1) * self.interval)
+
+            # Watch out, this is only possible for Daily data.
+            forecast_init_dates = pd.to_datetime(self.forecast_init_times).date
+            ds_datetimes = pd.to_datetime(self.ds['time'].values)
+            indices = [np.where(ds_datetimes.date == date)[0] for date in forecast_init_dates]
+            print("indicies")
+            print(indices)
+            # check if the first index of the indices corresponds to the date self.ds['time'][index]
+            # corresponding_date = self.ds['time'][indices[0]]
+            # print(corresponding_date)
+            self._forecast_init_indices = (np.array(indices, dtype='int') - ((self.input_time_dim - 1) * self.interval)).flatten()
+            print("new forecast indices")
+            print(self._forecast_init_indices)
+            
         else:
             self._forecast_init_indices = None
 
@@ -673,62 +686,3 @@ class TimeSeriesDataset(Dataset):
         targets = np.transpose(targets, axes=(0, 3, 1, 2, 4, 5))
 
         return inputs_result, targets
-
-
- # def get_mean_std_per_week(self):
-    #     mean_std_dict = {}
-        
-    #     if self.fine_scaled_vars:
-    #         weeks = self.ds['time'].dt.isocalendar().week.values
-    #         unique_weeks = np.unique(weeks)
-            
-    #         for var in self.fine_scaled_vars:
-    #             print(f"VARIABLE CHECK {var}")
-    #             mean_std_dict[var] = {}
-                
-    #             channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
-       
-    #             grouped_data = self.ds['inputs'][:, channel_index, :, :, :].groupby('time.week')
-                
-    #             # Calculate mean and std for all weeks
-    #             weekly_mean = grouped_data.mean(dim='time')
-    #             weekly_std = grouped_data.std(dim='time')
-                    
-    #             # Store results in mean_std_dict
-    #             for week in unique_weeks:
-    #                 mean_std_dict[var][week] = {
-    #                     'mean': weekly_mean.sel(week=week).values,
-    #                     'std': weekly_std.sel(week=week).values
-    #                 }
-    #                 # Properly scale values using .loc[]
-    #                 self.ds['inputs'][:, channel_index, :, :, :].loc[week_mask] -= weekly_mean.sel(week=week).values  # Subtract mean
-    #                 self.ds['inputs'][:, channel_index, :, :, :].loc[week_mask] /= weekly_std.sel(week=week).values  # Divide by std
-            
-       #return mean_std_dict
-   
-
-    # def scale_values_per_week(self):
-    #     # Assuming 'inputs' is your xarray Dataset
-    #     inputs = self.ds['inputs']  # Adjust according to your actual dataset structure
-        
-    #     # Iterate over each variable that needs to be scaled
-    #     for var in self.fine_scaled_vars:
-    #         print(f"Scaling variable: {var}")
-            
-    #         # Get the channel index for the current variable
-    #         channel_index = inputs.channel_in.values.tolist().index(var)
-
-    #         # Get weeks from the time dimension
-    #         weeks = self.ds['time'].dt.isocalendar().week.values
-            
-    #         for week in np.unique(weeks):
-    #             # Retrieve mean and std from mean_std_dict
-    #             mean = self.mean_std_dict[var][week]['mean']
-    #             std = self.mean_std_dict[var][week]['std']
-                
-    #             # Create a mask for the current week
-    #             week_mask = (weeks == week)
-                
-    #             # Properly scale values using .loc[]
-    #             inputs[:, channel_index, :, :, :].loc[week_mask] -= mean  # Subtract mean
-    #             inputs[:, channel_index, :, :, :].loc[week_mask] /= std   # Divide by std

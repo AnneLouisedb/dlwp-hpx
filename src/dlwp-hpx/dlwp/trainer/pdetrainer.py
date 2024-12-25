@@ -33,43 +33,7 @@ import torch.nn.functional as F
 from dlwp.utils import plot_single_step_frequency_spectrum
 import wandb
  
-
-# These are from the PDE ARENA
-# def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
-#     loss = F.mse_loss(input, target, reduction="none")
-#     # avg across space
-#     reduced_loss = torch.mean(loss, dim=tuple(range(3, loss.ndim)))
-#     # sum across time + fields
-#     reduced_loss = reduced_loss.sum(dim=(1, 2))
-#     # reduce along batch
-#     if reduction == "mean":
-#         return torch.mean(reduced_loss)
-#     elif reduction == "sum":
-#         return torch.sum(reduced_loss)
-#     elif reduction == "none":
-#         return reduced_loss
-#     else:
-#         raise NotImplementedError(reduction)
-
-
-class CustomMSELoss(torch.nn.Module):
-    """Custom MSE loss for PDEs.
-
-    MSE but summed over time and fields, then averaged over space and batch.
-
-    Args:
-        reduction (str, optional): Reduction method. Defaults to "mean".
-    """
-
-    def __init__(self, reduction: str = "mean") -> None:
-        super().__init__()
-        self.reduction = reduction
-
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-
-        MSEloss = torch.nn.MSELoss(reduction=self.reduction)
-        return MSEloss(input, target)
-
+from dlwp.trainer.losses import *
         
 class Trainer():
     """
@@ -251,10 +215,11 @@ class Trainer():
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
           
             # this has to be a torch cat over the third dimension TO DO             
-            x_in = torch.cat([inputs[0], y_noised], axis=3)    
-            x_in = [x_in, inputs[1]] # with solar insolation which is the inputs[1]
+            x_in = torch.cat([inputs[0], y_noised], axis=3)  
+            # append the x_in as inputs[0]
 
-   
+            x_in = [x_in] + inputs[1:]
+              
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
         
@@ -283,6 +248,19 @@ class Trainer():
            
     def compute_loss(self, prediction, target):
 
+        # write a Per variable (C dimension) to weights and biases
+        squared_error = (target - prediction) ** 2  # Shape: [B, T, C, F, H, W]
+
+        # Average over batch (B), time (T), height (H), and width (W) dimensions
+        per_channel_loss = squared_error.mean(dim=(0, 1, 4, 5))  # Shape: [C, F]
+
+        # Now average over the face (F) dimension
+        mean_per_channel_loss = per_channel_loss.mean(dim=1)  # Shape: [C]
+
+        # Log per-variable loss to Weights & Biases
+        for i, loss in enumerate(mean_per_channel_loss):
+            wandb.log({f"var_{i}_loss": loss.item()})
+
         # B, T, C, (F), H, W
         d = ((target- prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
 
@@ -310,11 +288,7 @@ class Trainer():
             
             for inputs, target in (pbar := tqdm(self.dataloader_train, disable=(not self.print_to_screen))):
                 
-                # for inp in inputs:
-                # print("Input size:")
-                #    print(inp.shape)
-                # output = self.model(inputs) - old version!!!
-
+                
                 inp_shapes = [x.shape for x in inputs]
                 self.static_inp = [torch.zeros(x_shape, dtype=torch.float32, device=self.device) for x_shape in inp_shapes]
                 self.static_tar = torch.zeros(target.shape, dtype=torch.float32, device=self.device)
@@ -366,16 +340,19 @@ class Trainer():
 
                         noise = torch.randn_like(self.static_tar)
                         y_noised = self.scheduler.add_noise(target, noise, k)
-                        # this has to be a torch cat over the third dimension TO DO
+                        
                         
                         x_in = torch.cat([inputs[0], y_noised], axis=3)
-                
-                        x_in = [x_in, inputs[1]] # with solar insolation which is the inputs[1]
+                        # adding the insolation to the input
+                        x_in = [x_in] + inputs[1:]
+                        
                         
                         output = self.model(x_in, time= time_tensor * self.time_multiplier)
                         
                         target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
                         train_loss = self.train_criterion(input = output, target = target)
+
+                       # train_loss *= self.loss_weighting(noise_levels)
 
                     
                     self.gscaler.scale(train_loss).backward()
@@ -461,6 +438,7 @@ class Trainer():
                     dist.all_reduce(validation_stats)
 
                 validation_error = (validation_stats[0] / validation_stats[-1]).item()
+                wandb.log({ "val_loss": validation_error}, step=iteration)
 
                 # Record error per variable
                 validation_errors = []

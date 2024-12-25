@@ -10,18 +10,18 @@ prefix: era5_1deg_1D_HPX32_1940-2024_
 suffix: ''
 data_format: classic
 input_variables:
-  - t2m
-  - sst
-  - ttr 
   - msl
+  - sst
   - stream250 
   - stream500
+  - t2m
+  - ttr    
 output_variables: null
 constants:
   land_sea_mask: lsm
   #topography: z
-input_time_dim: 1 # this was 2
-output_time_dim: 1 # this was 4
+input_time_dim: 2 # this was 2
+output_time_dim: 2 # this was 4
 data_time_step: 24h
 time_step: 24h
 gap: 24h
