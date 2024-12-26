@@ -5,17 +5,13 @@ defaults:
 
 src_directory: /home/adboer/dlwp-hpx/src/dlwp-hpx/data
 dst_directory: /home/adboer/dlwp-hpx/src/dlwp-hpx/data
-dataset_name: era5_hpx64_6var_24h_24h
+dataset_name: era5_hpx64_2var_24h_24h
 prefix: era5_1deg_1D_HPX64_1979-2024_snorm_
 suffix: ''
 data_format: classic
 input_variables:
-  - msl
   - sst
-  - stream250 
-  - stream500
-  - t2m
-  - ttr    
+  - t2m 
 output_variables: null
 constants:
   land_sea_mask: lsm

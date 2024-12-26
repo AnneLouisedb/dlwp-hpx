@@ -157,11 +157,19 @@ class HEALPixRemap(_BaseRemap):
 
         # Load .nc file in latlon format to extract latlon information and to initialize the remapper module
         ds_ll = xr.open_dataset(file_path)
+        # keep only from 1979 onwards
+        
         if times is not None: ds_ll = ds_ll.sel({"time": times})
 
-        # Get the variable name
-        vname = list(ds_ll.keys())[1]
-        print("The variable name?", vname)
+        try:
+            # Get the variable name
+            vname = list(ds_ll.keys())[1]
+            print("The variable name?", vname)
+        except:
+            # Get the variable name
+            vname = list(ds_ll.keys())[0]
+            print("The variable name?", vname)
+
 
         # Set up coordinates and chunksizes for the HEALPix dataset
         coords = {}
@@ -615,23 +623,7 @@ def inverse_remap_parallel(mapper: HEALPixRemap, data: np.array) -> np.array:
 if __name__ == "__main__":
     
     # Example of how to convert an ERA5 LatLon file to HEALPix and a forecast from HEALPix to LatLon
-    remapper = HEALPixRemap(
-        latitudes=181,
-        longitudes=360,
-        nside=32
-    )
-
-    print("Projecting LatLon dataset to HEALPix...")
-    file_path_ll = "data/era5_z500.nc"
-    file_path_ll = "/gpfs/work5/0/prjs1254/data_ERA5_1.0/T2M_era5_Global_1degr_19400101-20240229.nc"
-    # Open the remote dataset
-
-
-    ds = xr.open_dataset(file_path_ll, engine="netcdf4")
-
-    from geogif import gif
-
-    data_array = ds['t2m']
+    
     # only take the frame for 2012 to 2013
 
     # Select data from 2012 to 2013
@@ -660,22 +652,49 @@ if __name__ == "__main__":
     # return new data
     #print(f"Detected frequency: {frequency}")
     # Resample to weekly mean  
-     
+
+    # Example of how to convert an ERA5 LatLon file to HEALPix and a forecast from HEALPix to LatLon
+    remapper = HEALPixRemap(
+        latitudes=180,
+        longitudes=360,
+        nside=64
+    )
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/remap/scaled_weighted_grid_area_below20.nc'
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='cell_area', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1979-2024_snorm_')
+
+
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/remap/era5_1deg_1D_spatial_norm2_t2m.nc'
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='t2m', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1979-2024_snorm_')
+
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/remap/era5_1deg_1D_spatial_norm2_sst.nc'
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='sst', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1979-2024_snorm_')
+
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/remap/era5_1deg_1D_spatial_norm2_ttr.nc'
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='ttr', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1979-2024_snorm_')
+
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/remap/era5_1deg_1D_spatial_norm2_stream500.nc'
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='stream500', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1979-2024_snorm_')
+    
+    path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/remap/era5_1deg_1D_spatial_norm2_stream250.nc'
+    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='stream250', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1979-2024_snorm_')
+    
+    
+        
     #ds = ds.resample(time="W").mean()
     #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/SST_era5_NHExt_1degr_19400101-20240229.nc'
     #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/T2M_era5_Global_1degr_19400101-20240229.nc'
     #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/OLR_era5_tropics_1degr_19400101_20240229.nc'
     #path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/STREAM250_era5_Global_1degr_19400101_20240229.nc'
-    path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/STREAM500_era5_Global_1degr_19400101_20240229.nc'
-    #ds = xr.open_dataset(path)
+    # path = '/gpfs/work5/0/prjs1254/data_ERA5_1.0/STREAM500_era5_Global_1degr_19400101_20240229.nc'
+    # #ds = xr.open_dataset(path)
 
-    print('Data resampled..')
-    # Example of how to convert an ERA5 LatLon file to HEALPix and a forecast from HEALPix to LatLon
-    remapper = HEALPixRemap(
-        latitudes=181,
-        longitudes=360,
-        nside=64
-    )
+    # print('Data resampled..')
+    # # Example of how to convert an ERA5 LatLon file to HEALPix and a forecast from HEALPix to LatLon
+    # remapper = HEALPixRemap(
+    #     latitudes=181,
+    #     longitudes=360,
+    #     nside=64
+    # )
    
     # Get and print the start and end times
     #start_time = ds.time.values[0]
@@ -688,7 +707,7 @@ if __name__ == "__main__":
     # coordinates: time, longitude, latitude
     # data variables t2m and time_bnds>
     #Various data attributes
-    ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='STREAM500', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1940-2024_')
+    # ds_hpx = remapper.remap(file_path=path, poolsize=1, to_netcdf=True, target_variable_name='STREAM500', chunk_ds = False, prefix= 'era5_1deg_1D_HPX64_1940-2024_')
     #print(ds_hpx, "\n\n")
     #print("END")
     # now train a unet with this dataset?
@@ -708,5 +727,25 @@ if __name__ == "__main__":
     # print(dataset)
     # ds_ll = remapper.inverse_remap(forecast_path=file_path_hpx, verification_path=file_path_ll, poolsize=1, to_netcdf=True)
     # print(ds_ll)
+    # from geogif import gif
+    # import xarray as xr
+    # import numpy as np
+
+    # def make_gif(name, dataset, start_date = '2015-01-01', end_date = '2018-12-31'):
+    #     """ Store a GIF """
+    #     image =   gif(dataset.sel(time=slice(start_date, end_date)), to=f"{name}.gif")
+    #     return image
 
 
+    # path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/visualisations/era5_1deg_1D_REindexed_1940-2024_sst.nc'
+    # mapping = xr.open_dataset(path)
+
+
+
+    # # Step 1: Calculate the weekly mean per gridpoint
+    # weekly_mean = mapping.groupby('time.week').mean(dim='time')
+
+    # # Step 2: Subtract the weekly mean from the original data
+    # data_deseasonalized = mapping.groupby('time.isocalendar().week') - weekly_mean
+
+    # make_gif('sst_deasonal?', data_deseasonalized['sst'])
