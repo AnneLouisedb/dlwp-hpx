@@ -48,27 +48,20 @@ class CustomMSELoss(torch.nn.Module):
         super().__init__()
         self.reduction = reduction
 
-        path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX64_1940-2024_grid_area.nc'
+        #path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX64_1940-2024_grid_area.nc'
+        path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX64_1979-2024_snorm_cell_area.nc'
         weights_map = xr.open_dataset(path)
-        #min_val = weights_map.cell_area.min()
-        #max_val = weights_map.cell_area.max()
-
-        mean_val = weights_map.cell_area.mean()
-
-        # Apply min-max scaling
-        scaled_weights_ma = weights_map.cell_area / mean_val
-        #scaled_weights_ma = (weights_map.cell_area - min_val) / (max_val - min_val)
-
-        self.weights = torch.tensor(scaled_weights_ma.values , dtype=torch.float32)
+      
+        self.weights = torch.tensor(weights_map.cell_area.values , dtype=torch.float32)
         
-        self.variable_weights = {
-        'msl': 0.1,
-        'sst': 0.1,
-        'stream250': 1.0,
-        'stream500': 1.0,
-        't2m': 1.0,
-        'ttr': 1.0
-        }
+        # self.variable_weights = {
+        # 'msl': 0.1,
+        # 'sst': 0.1,
+        # 'stream250': 1.0,
+        # 'stream500': 1.0,
+        # 't2m': 1.0,
+        # 'ttr': 1.0
+        # }
 
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -80,15 +73,15 @@ class CustomMSELoss(torch.nn.Module):
         weights_expanded = self.weights.unsqueeze(0).unsqueeze(2).unsqueeze(3)
         weights_expanded = weights_expanded.expand(input.shape[0], -1, input.shape[2], input.shape[3], -1, -1)
 
-        # Apply grid area weighting
+        # # Apply grid area weighting
         weighted_squared_error = squared_error * weights_expanded
 
-        # Apply per-variable weights
-        for idx, (var, weight) in enumerate(self.variable_weights.items()):
-            weighted_squared_error[:, :, :, idx, :, :] *= weight
+        # # Apply per-variable weights
+        # for idx, (var, weight) in enumerate(self.variable_weights.items()):
+        #     weighted_squared_error[:, :, :, idx, :, :] *= weight
 
-        print('weighted error?', weighted_squared_error.shape)
-
+        # print('weighted error?', weighted_squared_error.shape)
+        
         reduced_loss = torch.mean(weighted_squared_error)
      
     
