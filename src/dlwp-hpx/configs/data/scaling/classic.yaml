@@ -1,42 +1,19 @@
 
 t2m:
-  mean: 287.1095  
-  std: 15.32 
-t850:
-  mean: 281.2710266113281
-  std: 12.04991626739502
+  mean: 278.6  # 1979 to 2019
+  std: 21.0
 msl: 
-  mean: 100964.87
-  std: 1282.4757
+  mean: 100963.914 # 1979 to 2019
+  std: 1309.5121
 stream500:
-  mean: 2008995.8
-  std: 42305444.
+  mean: 2012288.4 # 1979 to 2019
+  std: 42364664.
 stream250:
-  mean: 2594045.5  #'temporal_spatial_fine' , 
-  std: 87912936. #'temporal_spatial_fine'
+  mean: 2567648.  # 1979 to 2019
+  std: 88027288. 
 ttr:
-  mean: -948322.4  #'temporal_spatial_fine'
-  std: 137178.39 #'temporal_spatial_fine'
+  mean:  -946222.4  
+  std:  137178.39 # 1979 to 2019
 sst:
-  mean: 289.8 
+  mean: 289.9 # 1979 to 2019
   std: 11.51 
-
-tau300-700:
-  mean: 61902.72265625
-  std: 2559.8408203125
-tcwv0:
-  mean: 24.034976959228516
-  std: 16.411935806274414
-z1000:
-  mean: 952.1435546875
-  std: 895.7516479492188
-z250:
-  mean: 101186.28125
-  std: 5551.77978515625
-z500:
-  mean: 55625.9609375
-  std: 2681.712890625
-tp6:
-  mean: 0.
-  std: 1.
-  log_epsilon: 1e-6
