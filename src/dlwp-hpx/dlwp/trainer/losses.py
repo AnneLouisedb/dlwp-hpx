@@ -9,31 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import warnings
-
-#from typing import Mapping
-
-#from graphcast import xarray_tree
-import numpy as np
-#from typing_extensions import Protocol
+import wandb
 import xarray as xr
-
-# These are from the PDE ARENA
-# def custommse_loss(input: torch.Tensor, target: torch.Tensor, reduction: str = "mean"):
-#     loss = F.mse_loss(input, target, reduction="none")
-#     # avg across space
-#     reduced_loss = torch.mean(loss, dim=tuple(range(3, loss.ndim)))
-#     # sum across time + fields
-#     reduced_loss = reduced_loss.sum(dim=(1, 2))
-#     # reduce along batch
-#     if reduction == "mean":
-#         return torch.mean(reduced_loss)
-#     elif reduction == "sum":
-#         return torch.sum(reduced_loss)
-#     elif reduction == "none":
-#         return reduced_loss
-#     else:
-#         raise NotImplementedError(reduction)
-
 
 class CustomMSELoss(torch.nn.Module):
     """Custom MSE loss for PDEs.
@@ -47,51 +24,40 @@ class CustomMSELoss(torch.nn.Module):
     def __init__(self, reduction: str = "mean") -> None:
         super().__init__()
         self.reduction = reduction
-
-        #path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX64_1940-2024_grid_area.nc'
-        path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX64_1979-2024_snorm_cell_area.nc'
-        weights_map = xr.open_dataset(path)
-      
-        self.weights = torch.tensor(weights_map.cell_area.values , dtype=torch.float32)
         
-        # self.variable_weights = {
-        # 'msl': 0.1,
-        # 'sst': 0.1,
-        # 'stream250': 1.0,
-        # 'stream500': 1.0,
-        # 't2m': 1.0,
-        # 'ttr': 1.0
-        # }
-
-
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        self.weights = self.weights.to(target.device)
-
-        # Ensure weights are on the same device as input
-        squared_error = (input - target)**2
-
-        weights_expanded = self.weights.unsqueeze(0).unsqueeze(2).unsqueeze(3)
-        weights_expanded = weights_expanded.expand(input.shape[0], -1, input.shape[2], input.shape[3], -1, -1)
-
-        # # Apply grid area weighting
-        weighted_squared_error = squared_error * weights_expanded
-
-        # # Apply per-variable weights
-        # for idx, (var, weight) in enumerate(self.variable_weights.items()):
-        #     weighted_squared_error[:, :, :, idx, :, :] *= weight
-
-        # print('weighted error?', weighted_squared_error.shape)
+        path = '/home/adboer/dlwp-hpx/src/dlwp-hpx/data/era5_1deg_1D_HPX64_1979-2024_grid_area.nc'
+        weights_map = xr.open_dataset(path) 
+        weights = torch.tensor(weights_map.cell_area.values , dtype=torch.float32)
+        self.spatial_weights = weights.unsqueeze(0).unsqueeze(2).unsqueeze(3)
         
-        reduced_loss = torch.mean(weighted_squared_error)
-     
-    
-        return reduced_loss 
+   
+
+    def forward(self, input, target):
+        # B, T, C, (F), H, W
+        channel_weights = torch.tensor([0.1, 1.0, 0.1, 0.1, 0.1, 0.1], device=input.device)
+        # weight targets by area - do this for each item in the batch (16) and across the channel and time dimension (1 and 6)
+        self.spatial_weights = torch.tensor(self.spatial_weights, device = input.device)
+        d = ((target-input)**2)*self.spatial_weights # torch.Size([16, 12, 1, 6, 64, 64])
+        d = d.mean(dim=(0, 1, 2, 4, 5))*channel_weights 
+        
        
+        for i, channel_loss in enumerate(d):
+            wandb.log({f"loss_channel_{i}": channel_loss.item()})
+        
+        return torch.mean(d)
+
+   
 
 
-#MSEloss = torch.nn.MSELoss(reduction=self.reduction) # MSEloss(input, target)
-# LossAndDiagnostics = tuple[xarray.DataArray, xarray.Dataset]
+         
+# def compute_loss(self, prediction, target):
+#         # B, T, C, (F), H, W
+#     d = ((target- prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
+#     # store the loss per channel in wandb before taking the mean
+#         # Log the loss per channel in wandb
+    
+#     for i, channel_loss in enumerate(d):
+#         wandb.log({f"loss_channel_{i}": channel_loss.item()})
+    
 
-
-
-
+#     return torch.mean(d)

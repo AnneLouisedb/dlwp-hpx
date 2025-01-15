@@ -7,8 +7,7 @@ import einops
 
 from dlwp.model.modules.healpix import HEALPixLayer
 from dlwp.model.modules.utils import Interpolate
-
-
+from dlwp.model.modules.utils import zero_module
 #
 # FOLDING/UNFOLDING BLOCKS
 #
@@ -544,3 +543,114 @@ class TransposedConvUpsample(th.nn.Module):
 
     def forward(self, x):
         return self.upsampler(x)
+
+
+# Conditional Residual block for the Modern Unet used in the PDE-REfiner
+class ResidualBlock(th.nn.Module):
+    """Wide Residual Blocks used in modern Unet architectures.
+
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        cond_channels (int): Number of channels in the conditioning vector.
+        activation (str): Activation function to use.
+        norm (bool): Whether to use normalization.
+        n_groups (int): Number of groups for group normalization.
+        use_scale_shift_norm (bool): Whether to use scale and shift approach to conditoning (also termed as `AdaGN`).
+        n_dims (int): Number of spatial dimensions. Defaults to 1.
+        # TO DO FINISH DOCSTRING
+
+    Note:
+        This conditional residual block is used in the Modern U-Net, PDE-REfiner paper. (Figure 10: ResNet block of the Modern U-Net)
+    """
+    def __init__(
+        self,
+        geometry_layer: th.nn.Module = HEALPixLayer,
+        in_channels: int = 3,
+        latent_channels: int = 1,
+        out_channels: int = 1,
+        kernel_size: int = 3,
+        dilation: int = 1,
+        upscale_factor: int = 4,
+        cond_channels_main: int = 0,
+        time_embed_dim: int = 1024, 
+        activation: th.nn.Module = th.nn.GELU(),
+        enable_nhwc: bool = False,
+        enable_healpixpad: bool = False,
+        use_scale_shift_norm: bool = False, # n_dims = 1
+        norm: bool = False, 
+        n_groups: int = 32,
+        n_layers = None,
+        ):
+        super().__init__()
+
+        self.use_scale_shift_norm = use_scale_shift_norm
+        self.activation = activation
+       
+        # Main convolution layers
+        self.conv1 = geometry_layer(
+            layer='torch.nn.Conv2d',
+            in_channels=in_channels, #+ cond_channels_main,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            enable_nhwc=enable_nhwc,
+            enable_healpixpad=enable_healpixpad,
+            
+        )
+        # this one has to go through the zero_module
+        self.conv2 = zero_module(geometry_layer(
+            layer='torch.nn.Conv2d',
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            enable_nhwc=enable_nhwc,
+            enable_healpixpad=enable_healpixpad
+        ))
+        
+
+         # Shortcut connection
+        if in_channels != out_channels:
+            self.shortcut = geometry_layer(
+                layer='torch.nn.Conv2d',
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=1,
+                enable_nhwc=enable_nhwc,
+                enable_healpixpad=enable_healpixpad
+            )
+        else:
+            self.shortcut = th.nn.Identity()
+
+
+        if norm: # check if 32 is the default group norm?
+            self.norm1 = th.nn.GroupNorm(n_groups, in_channels + cond_channels_main)
+            self.norm2 = th.nn.GroupNorm(n_groups, out_channels)
+        else:
+            self.norm1 = th.nn.Identity()
+            self.norm2 = th.nn.Identity()
+
+        #self.cond_emb = th.nn.Linear(time_embed_dim, 2 * out_channels if use_scale_shift_norm else out_channels)
+      
+
+    def forward(self, x: th.Tensor):
+        """
+        1. GroupNorm
+        2. GELU
+        3. Convolution
+        4. Groupnorm
+        5. Scale-and-Shift (conditioning features)
+        6. GELU
+        7. Convolution
+        8. +Adding residual input (shortcut)
+        """
+        # Step 1 - 3
+        
+        h = self.conv1(self.activation(self.norm1(x)))
+        
+        # Step 4 - 7
+        h = self.conv2(self.activation(self.norm2(h)))
+       
+        # Step 8
+        return h + self.shortcut(x)

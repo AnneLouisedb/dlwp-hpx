@@ -30,7 +30,6 @@ from dlwp.utils import write_checkpoint
 # diffusion 
 from diffusers.schedulers import DDPMScheduler
 import torch.nn.functional as F
-from dlwp.utils import plot_single_step_frequency_spectrum
 import wandb
  
 from dlwp.trainer.losses import *
@@ -197,7 +196,7 @@ class Trainer():
         loss_vecs = {k: sum(v) / max(1, len(v)) for k, v in losses.items()}
         return loss_vecs
 
-    def predict_next_solution(self, inputs, save = None):
+    def predict_next_solution(self, inputs):
         """ This should be called once the model is trained! Call in the evaluation!"""
         if isinstance(inputs, list):
             # Get the first element of the list
@@ -209,7 +208,6 @@ class Trainer():
             # Generate a random tensor with the same shape and type as the input tensor
             y_noised = torch.randn_like(inputs, device=self.device)
 
-        storing = []
         for k_scalar in self.scheduler.timesteps:
             batch_size = inputs[0].shape[0] if isinstance(inputs, list) else inputs.shape[0]
             time_tensor = torch.full((batch_size,), k_scalar, device=inputs[0].device if isinstance(inputs, list) else inputs.device)
@@ -223,49 +221,12 @@ class Trainer():
             pred = self.model(x_in, time=  time_tensor * self.time_multiplier) 
             y_noised = self.scheduler.step(pred, k_scalar, y_noised).prev_sample
         
-            if save:
-                storing.append(y_noised)
-
-        y = y_noised 
-        
-
-        if save:
-
-            remapper = HEALPixRemap(
-            latitudes=181,
-            longitudes=360,
-            nside=32
-            )
-
-            for idx, image in enumerate(storing):
-                first_item = image[0]  # Shape: [12, 1, 1, 32, 32]
-                first_item_squeezed = first_item.squeeze()  # Shape: [12, 32, 32]
-                remapper.hpx2ll(first_item_squeezed,  visualize = True, title = f"{idx}")
-                print(f"Images saved to directory.")
-                        
-
-        return y 
            
-    def compute_loss(self, prediction, target):
-
-        # write a Per variable (C dimension) to weights and biases
-        squared_error = (target - prediction) ** 2  # Shape: [B, T, C, F, H, W]
-
-        # Average over batch (B), time (T), height (H), and width (W) dimensions
-        per_channel_loss = squared_error.mean(dim=(0, 1, 4, 5))  # Shape: [C, F]
-
-        # Now average over the face (F) dimension
-        mean_per_channel_loss = per_channel_loss.mean(dim=1)  # Shape: [C]
-
-        # Log per-variable loss to Weights & Biases
-        for i, loss in enumerate(mean_per_channel_loss):
-            wandb.log({f"var_{i}_loss": loss.item()})
-
-        # B, T, C, (F), H, W
-        d = ((target- prediction)**2).mean(dim=(0, 1, 2, 4, 5)) #*self.loss_weights
-
-        return torch.mean(d)
-
+        y = y_noised 
+                
+        return y 
+  
+          
     def fit(
             self,
             epoch: int = 0,
@@ -350,10 +311,13 @@ class Trainer():
                         output = self.model(x_in, time= time_tensor * self.time_multiplier)
                         
                         target = (noise_factor**0.5) * noise - (signal_factor**0.5) * target
-                        train_loss = self.train_criterion(input = output, target = target)
 
-                       # train_loss *= self.loss_weighting(noise_levels)
-
+                       
+                        train_loss = self.train_criterion(input = output, target = target) 
+                        wandb.log({f"train_loss_k{k_scalar}": train_loss.item() 
+                        })
+                         
+                       
                     
                     self.gscaler.scale(train_loss).backward()
 
@@ -372,7 +336,7 @@ class Trainer():
 
                 if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
                     #self.writer.add_scalar(tag="loss", scalar_value=train_loss, global_step=iteration)
-                    wandb.log({"loss": train_loss}, step=iteration)
+                    wandb.log({"train loss": train_loss}, step=iteration)
 
                 iteration += 1
                 training_step += 1
@@ -416,23 +380,26 @@ class Trainer():
                         
                         with amp.autocast(enabled=self.amp_enable, dtype=self.amp_dtype):
                             
-                            output = self.predict_next_solution(inputs)
-                        
-                            # this is the output of the autoregressive time step
-                            # plot_single_step_frequency_spectrum(output, target, spatial_domain_size = 1000)
+                            output = self.predict_next_solution(inputs) 
 
+                            output_example = output[0] # [B, F, T, C, H, W] -> [F, T, C, H, W]
+                            print("shape of prediction?", output_example.shape)
+
+
+                            
                             # this has to be compute loss!!
-                            validation_stats[0] += self.compute_loss(prediction = output, target = target) * bsize
+                            validation_stats[0] += self.train_criterion(input = output, target = target)  * bsize  
+                            
                             for v_idx, v_name in enumerate(self.output_variables):
                                 validation_stats[1+v_idx] += self.criterion(
                                     output[v_idx], target[v_idx]
                                     ) * bsize
                        
-                    pbar.set_postfix({"Loss": (validation_stats[0]/validation_stats[-1]).item()})
-                   
-
+                    
                     # increment sample counter
                     validation_stats[-1] += bsize
+
+                # wandb.log({f"validation loss": (validation_stats[0]/validation_stats[-1]).item() },  step=iteration)
 
                 if dist.is_initialized():
                     dist.all_reduce(validation_stats)
@@ -467,11 +434,11 @@ class Trainer():
                 wandb.log({ "val_loss": validation_error}, step=iteration)
 
                 # Per-variable loss
-                for v_idx, v_name in enumerate(self.output_variables):
+                # for v_idx, v_name in enumerate(self.output_variables):
                     #self.writer.add_scalar(tag=f"val_loss/{v_name}", scalar_value=validation_errors[v_idx],
                     #                       global_step=iteration)
                 
-                    wandb.log({f"val_loss/{v_name}": validation_errors[v_idx]}, step=iteration)
+                #    wandb.log({f"val_loss/{v_name}": validation_errors[v_idx]}, step=iteration)
 
 
                 # Write model checkpoint to file, using a separate thread

@@ -126,7 +126,7 @@ class ConditionalUNetEncoder(th.nn.Module):
             dilations = [1 for _ in range(len(n_channels))]
 
         # Build encoder
-        old_channels = input_channels + input_channels - 3  # double the input channels since we add another input
+        old_channels = input_channels + input_channels - 2 #2 #3  # double the input channels since we add another input
         
         self.encoder = []
         for n, curr_channel in enumerate(n_channels): 
@@ -201,12 +201,15 @@ class UNetEncoder(th.nn.Module):
             input_channels: int = 3,
             n_channels: Sequence = (16, 32, 64),
             n_layers: Sequence = (2, 2, 1),
+            time_embed_dim = 0,
             dilations: list = None,
             enable_nhwc: bool = False,
-            enable_healpixpad: bool = False
+            enable_healpixpad: bool = False,
+            
     ):
         super().__init__()
         self.n_channels = n_channels
+        self.activation = CappedGELU()
 
         if dilations is None:
             # Defaults to [1, 1, 1...] in accordance with the number of unet levels
