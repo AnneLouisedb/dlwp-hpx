@@ -19,6 +19,9 @@ class Swish(th.nn.Module):
         return x * th.sigmoid(x)
 
 class ConvNeXtBlock(ConditionedBlock):
+    # https://medium.com/@mickael.boillaud/denoising-diffusion-model-from-scratch-using-pytorch-658805d293b4
+    # Adding the time embeddings after the first 7x7 convolution
+    # Notebook with code: https://github.com/huggingface/notebooks/blob/main/examples/annotated_diffusion.ipynb
     def __init__(
             self,
             geometry_layer: th.nn.Module = HEALPixLayer,
@@ -31,11 +34,14 @@ class ConvNeXtBlock(ConditionedBlock):
             n_layers: int = 1,
             activation: th.nn.Module = None,
             enable_nhwc: bool = False,
-            enable_healpixpad: bool = False
+            enable_healpixpad: bool = False,
+            time_embed_dim: int = 1024,
             ):
         super().__init__()
+        # The original authors do apply an activation function before, should I?
+        self.cond_emb = th.nn.Linear(time_embed_dim, int(latent_channels*upscale_factor))
+        # self.cond_emb =  th.nn.Sequential(th.nn.GELU(), th.nn.Linear(time_emb_dim, dim))
 
-       
         if in_channels == out_channels:
             self.skip_module = lambda x: x
         else:
@@ -47,9 +53,8 @@ class ConvNeXtBlock(ConditionedBlock):
                 enable_nhwc=enable_nhwc,
                 enable_healpixpad=enable_healpixpad
             )
-
-        convblock = []
-        convblock.append(geometry_layer(
+        convblock1 = []
+        convblock1.append(geometry_layer(
             layer='torch.nn.Conv2d',
             in_channels=in_channels,
             out_channels=int(latent_channels*upscale_factor),
@@ -58,8 +63,11 @@ class ConvNeXtBlock(ConditionedBlock):
             enable_nhwc=enable_nhwc,
             enable_healpixpad=enable_healpixpad
         ))
-        if activation is not None: convblock.append(activation)
-        convblock.append(geometry_layer(
+
+        convblock2 = []
+        
+        if activation is not None: convblock2.append(activation)
+        convblock2.append(geometry_layer(
             layer='torch.nn.Conv2d',
             in_channels=int(latent_channels*upscale_factor),
             out_channels=int(latent_channels*upscale_factor),
@@ -68,8 +76,8 @@ class ConvNeXtBlock(ConditionedBlock):
             enable_nhwc=enable_nhwc,
             enable_healpixpad=enable_healpixpad
         ))
-        if activation is not None: convblock.append(activation)
-        convblock.append(geometry_layer(
+        if activation is not None: convblock2.append(activation)
+        convblock2.append(geometry_layer(
             layer='torch.nn.Conv2d',
             in_channels=int(latent_channels*upscale_factor),
             out_channels=out_channels,
@@ -77,12 +85,22 @@ class ConvNeXtBlock(ConditionedBlock):
             enable_nhwc=enable_nhwc,
             enable_healpixpad=enable_healpixpad
         ))
-        self.convblock = th.nn.Sequential(*convblock)
+        self.convblock1 = th.nn.Sequential(*convblock1)
+        self.convblock2 = th.nn.Sequential(*convblock2)
 
     def forward(self, x, time_emb):
+
         
-        h = self.convblock(x)
-        h = h + time_emb 
+        emb_out = self.cond_emb(time_emb) 
+       
+        h = self.convblock1(x)
+        emb_out =  emb_out.unsqueeze(-1).unsqueeze(-1)
+    
+        while len(emb_out.shape) < len(h.shape):
+            emb_out = emb_out[..., None]
+
+        h = h + emb_out 
+        h = self.convblock2(h)
         return self.skip_module(x) + h
     
 
@@ -238,11 +256,11 @@ class ConditionalResidualBlock(ConditionedBlock):
         """
         1. GroupNorm
         2. GELU
-        3. Convolution
+        3. Convolution # first convolution
         4. Groupnorm
         5. Scale-and-Shift (conditioning features)
         6. GELU
-        7. Convolution
+        7. Convolution # second convolution
         8. +Adding residual input (shortcut)
         """
         # Step 1 - 3
