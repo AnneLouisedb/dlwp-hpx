@@ -126,7 +126,7 @@ class ConditionalUNetEncoder(th.nn.Module):
             dilations = [1 for _ in range(len(n_channels))]
 
         # Build encoder
-        old_channels = input_channels + input_channels - 2 #2 #3  # double the input channels since we add another input
+        old_channels = input_channels + input_channels - 5 #3 #2 #3  # double the input channels since we add another input
         
         self.encoder = []
         for n, curr_channel in enumerate(n_channels): 

@@ -59,7 +59,7 @@ class Trainer():
             difference_weight: float = 1.0,
             min_noise_std: float = 4e-7,
             ema_decay: float = 0.995,
-            writing: bool = True
+            diffusion: bool = True
             ):
         """
         Constructor.
@@ -118,86 +118,14 @@ class Trainer():
         self.train_graph = None
         self.eval_graph = None
 
-        if dist.is_initialized():
-            print("initialize distributed training?..")
-
-            capture_stream = torch.cuda.Stream()
-            with torch.cuda.stream(capture_stream):
-                self.model = DDP(self.model,
-                                 device_ids = [self.device.index],
-                                 output_device = [self.device.index],
-                                 broadcast_buffers = True,
-                                 find_unused_parameters = False,
-                                 gradient_as_bucket_view = True)
-                capture_stream.synchronize()
-
-            self.print_to_screen = dist.get_rank() == 0
-
-            # capture graph if requested
-            if graph_mode in ["train", "train_eval"]:
-                if self.print_to_screen:
-                    print(f"Capturing model for training ...")
-                # get the shapes
-                inp, tar = next(iter(self.dataloader_train))
-                
-                self._train_capture(capture_stream, [x.shape for x in inp], tar.shape)
-
-                if graph_mode == "train_eval":
-                    if self.print_to_screen:
-                        print(f"Capturing model for validation ...")
-                    self._eval_capture(capture_stream)
-        else:
-            print("DIST is NOT initialized!")
-
-        # Set up tensorboard summary_writer or try 'weights and biases'
-        # Initialize tensorbaord to track scalars
-        if writing:
-            if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
-                #self.writer = SummaryWriter(log_dir=self.output_dir_tb)
-                wandb.init(project="your_project_name")
+    
+        if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
+            
+            wandb.init(project="your_project_name")
 
     
-
-    # Make sure this code aligns!!         
-    def compute_rolloutloss(self, batch, ):
-        (u, v, cond, grid) = batch
-
-        losses = {k: [] for k in self.rollout_criterions.keys()}
-        for start in range(0, self.max_start_time + 1, self.hparams.time_future + 1):
-
-            end_time = start + self.hparams.time_history
-            target_start_time = end_time + 1 # time step
-            target_end_time = target_start_time + self.hparams.time_future * self.hparams.max_num_steps
-
-            # input sequence
-            init_u = u[:, start:end_time, ...]
-            # ground truth sequence
-            targ_u = u[:, target_start_time:target_end_time, ...]
-
-            init_v = None
-            targ_traj = targ_u
-
-            pred_traj = cond_rollout2d(
-                self,
-                init_u,
-                init_v,
-                None,
-                cond,
-                grid,
-                self.pde,
-                self.hparams.time_history,
-                min(targ_u.shape[1], self.hparams.max_num_steps),
-            )
-
-            for k, criterion in self.rollout_criterions.items():
-                loss = criterion(pred_traj, targ_traj)
-                loss = loss.mean(dim=(0,) + tuple(range(2, loss.ndim)))
-                losses[k].append(loss)
-        loss_vecs = {k: sum(v) / max(1, len(v)) for k, v in losses.items()}
-        return loss_vecs
-
     def predict_next_solution(self, inputs):
-        """ This should be called once the model is trained! Call in the evaluation!"""
+        """ This should be called once the model is trained! """
         if isinstance(inputs, list):
             # Get the first element of the list
             first_element = inputs[0]
@@ -258,13 +186,9 @@ class Trainer():
                 #for inputs, target in self.dataloader_train:
                 pbar.set_description(f"Training  epoch {epoch+1}/{self.max_epochs}")
 
-                if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
-                    #self.writer.add_scalar(tag="epoch", scalar_value=epoch, global_step=iteration)
-                    wandb.log({"epoch": epoch}, step=iteration)
+               
+                wandb.log({"epoch": epoch}, step=iteration)
                     
-
-                torch.cuda.nvtx.range_push(f"training step {training_step}") 
-                
                 inputs = [x.to(device=self.device) for x in inputs]
                 
                 target = target.to(device=self.device)
@@ -383,10 +307,7 @@ class Trainer():
                             output = self.predict_next_solution(inputs) 
 
                             output_example = output[0] # [B, F, T, C, H, W] -> [F, T, C, H, W]
-                            print("shape of prediction?", output_example.shape)
-
-
-                            
+                
                             # this has to be compute loss!!
                             validation_stats[0] += self.train_criterion(input = output, target = target)  * bsize  
                             
@@ -399,8 +320,9 @@ class Trainer():
                     # increment sample counter
                     validation_stats[-1] += bsize
 
-                # wandb.log({f"validation loss": (validation_stats[0]/validation_stats[-1]).item() },  step=iteration)
-
+                wandb.log({f"validation loss": (validation_stats[0]/validation_stats[-1]).item() },  step=iteration)
+                pbar.set_postfix({"Loss": (validation_stats[0]/validation_stats[-1]).item()})
+                
                 if dist.is_initialized():
                     dist.all_reduce(validation_stats)
 
@@ -425,20 +347,15 @@ class Trainer():
             # Logging and checkpoint saving
             if (dist.is_initialized() and dist.get_rank() == 0) or not dist.is_initialized():
                 if self.lr_scheduler is not None:
-                    #self.writer.add_scalar(tag="learning_rate", scalar_value=self.optimizer.param_groups[0]['lr'],
-                    #                       global_step=iteration)
                     wandb.log({ "learning_rate": self.optimizer.param_groups[0]['lr']}, step=iteration)
                     
-                #self.writer.add_scalar(tag="val_loss", scalar_value=validation_error, global_step=iteration)
                 
                 wandb.log({ "val_loss": validation_error}, step=iteration)
 
-                # Per-variable loss
-                # for v_idx, v_name in enumerate(self.output_variables):
-                    #self.writer.add_scalar(tag=f"val_loss/{v_name}", scalar_value=validation_errors[v_idx],
-                    #                       global_step=iteration)
-                
-                #    wandb.log({f"val_loss/{v_name}": validation_errors[v_idx]}, step=iteration)
+                #Per-variable loss
+                for v_idx, v_name in enumerate(self.output_variables):
+                    
+                    wandb.log({f"val_loss/{v_name}": validation_errors[v_idx]}, step=iteration)
 
 
                 # Write model checkpoint to file, using a separate thread
@@ -463,6 +380,47 @@ class Trainer():
                        " epochs. Finishing training.")
                 break
 
+
+
+
+
+# Make sure this code aligns!! PDE ARENA     
+    # def compute_rolloutloss(self, batch, ):
+    #     (u, v, cond, grid) = batch
+
+    #     losses = {k: [] for k in self.rollout_criterions.keys()}
+    #     for start in range(0, self.max_start_time + 1, self.hparams.time_future + 1):
+
+    #         end_time = start + self.hparams.time_history
+    #         target_start_time = end_time + 1 # time step
+    #         target_end_time = target_start_time + self.hparams.time_future * self.hparams.max_num_steps
+
+    #         # input sequence
+    #         init_u = u[:, start:end_time, ...]
+    #         # ground truth sequence
+    #         targ_u = u[:, target_start_time:target_end_time, ...]
+
+    #         init_v = None
+    #         targ_traj = targ_u
+
+    #         pred_traj = cond_rollout2d(
+    #             self,
+    #             init_u,
+    #             init_v,
+    #             None,
+    #             cond,
+    #             grid,
+    #             self.pde,
+    #             self.hparams.time_history,
+    #             min(targ_u.shape[1], self.hparams.max_num_steps),
+    #         )
+
+    #         for k, criterion in self.rollout_criterions.items():
+    #             loss = criterion(pred_traj, targ_traj)
+    #             loss = loss.mean(dim=(0,) + tuple(range(2, loss.ndim)))
+    #             losses[k].append(loss)
+    #     loss_vecs = {k: sum(v) / max(1, len(v)) for k, v in losses.items()}
+    #     return loss_vecs
        
         
 

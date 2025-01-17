@@ -144,6 +144,8 @@ def open_time_series_dataset_classic_on_the_fly(
     logger.info("merged datasets in %0.1f s", time.time() - merge_time)
     logger.info("Inputs variables,", list(input_variables))
 
+  
+
     return result
     
 
@@ -257,7 +259,7 @@ def create_time_series_dataset_classic(
         with ProgressBar():
             logger.info(f"writing dataset to {path}")
             write_job.compute()
-
+    
     write_zarr(data=result, path=os.path.join(dst_directory, dataset_name + ".zarr"))
     
     return result
@@ -486,23 +488,9 @@ class TimeSeriesDataset(Dataset):
 
         self.input_scaling = None
         self.target_scaling = None
-        self.fine_scaled_vars = {}
         self._get_scaling_da()
-
         
-    def get_mean_std(self, var): 
-        channel_index = self.ds['inputs'].channel_in.values.tolist().index(var)
-        grouped_data = self.ds['inputs'][:, channel_index, :, :, :]
         
-        # Calculate mean and std for all weeks
-        mean = grouped_data.mean(dim='time')
-        std = grouped_data.std(dim='time')
-           
-        out_mean = np.mean(mean.values)
-        out_std = np.mean(std.values) 
-                        
-        return out_mean, out_std
-
     def get_constants(self):
         # extract from ds:
         const = self.ds.constants.values
@@ -527,26 +515,20 @@ class TimeSeriesDataset(Dataset):
                 'std': 1. if isinstance(values['std'], str) else values['std']
             }
 
-            # if values['mean'] == 'temporal_spatial_fine':
-            #     print("Global mean != temporal spatial fine")
-            #     # return scaling for this value
-            #     mean, std = self.get_mean_std(var)
-            #     processed_scaling[var] = {
-            #     'mean': mean,
-            #     'std': std }
-                
 
         scaling_df = pd.DataFrame.from_dict(processed_scaling).T # this dict now contains some strings with 'temporal_spatial_fine' 
         scaling_df.loc['zeros'] = {'mean': 0., 'std': 1.}
         scaling_da = scaling_df.to_xarray().astype('float32')
        
+    
         # REMARK: we remove the xarray overhead from these
         try:
             self.input_scaling = scaling_da.sel(index=self.ds.channel_in.values).rename({'index': 'channel_in'})
             self.input_scaling = {"mean": np.expand_dims(self.input_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
                                   "std": np.expand_dims(self.input_scaling["std"].to_numpy(), (0, 2, 3, 4))}
 
-            print("expanded input scaling, mean shape?", self.input_scaling['mean'].shape)
+            print("expanded input scaling, mean shape?", self.input_scaling['mean'].shape) # expanded input scaling, mean shape? (1, 6, 1, 1, 1)
+            
 
         except (ValueError, KeyError):
             raise KeyError(f"one or more of the input data variables f{list(self.ds.channel_in)} not found in the "
@@ -609,26 +591,14 @@ class TimeSeriesDataset(Dataset):
         input_array = (input_array - self.input_scaling['mean']) / self.input_scaling['std']
 
         input_array = np.nan_to_num(input_array, nan=0.0)
-
                 
         if not self.forecast_mode:
             target_array = self.ds['targets'].isel(**batch).to_numpy()
             target_array = (target_array - self.target_scaling['mean']) / self.target_scaling['std']
             target_array = np.nan_to_num(target_array, nan=0.0)
 
-            # Apply fine scaling for target variables - if not in the forecast mode?
-            for i, var in enumerate(self.ds.channel_out.values):
-                if var in self.fine_scaled_vars:
-                    print(f"Special spacing for {var}")
-                    if self.fine_scaled_vars[var]['mean'] == 'temporal_spatial_fine':
-                        # Apply temporal-spatial fine scaling
-                        weeks = self.ds['time'].isel(**batch).dt.isocalendar().week.values
-                        for j, week in enumerate(weeks):
-                            mean = self.mean_std_dict[var][week]['mean']
-                            std = self.mean_std_dict[var][week]['std']
-                            target_array[j, i] = (target_array[j, i] - mean) / std
-                            
-                   
+           
+                                
         logger.log(5, "loaded batch data in %0.2f s", time.time() - load_time)
         torch.cuda.nvtx.range_pop()
 
@@ -668,9 +638,9 @@ class TimeSeriesDataset(Dataset):
         inputs_result = [np.transpose(x, axes=(0, 3, 1, 2, 4, 5)) for x in inputs_result]
             
         if 'constants' in self.ds.data_vars:
-            print("are there constants to be added?")
             # Add the constants as [F, C, H, W]
             inputs_result.append(np.swapaxes(self.ds.constants.values, 0, 1))
+
             #inputs_result.append(self.ds.constants.values)
         logger.log(5, "computed batch in %0.2f s", time.time() - compute_time)
         torch.cuda.nvtx.range_pop()
